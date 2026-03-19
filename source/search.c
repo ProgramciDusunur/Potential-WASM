@@ -1,0 +1,1942 @@
+//
+// Created by erena on 13.09.2024.
+//
+
+#include "search.h"
+#include <ctype.h>
+#include <stdint.h>
+
+#if defined(__AVX2__) || defined(__SSE4_1__)
+#include <immintrin.h>
+#endif
+
+
+
+/*███████████████████████████████████████████████████████████████████████████████*\
+  ██                                                                           ██
+  ██          T U N A B L E    S E A R C H    P A R A M E T E R S              ██
+  ██                                                                           ██
+\*███████████████████████████████████████████████████████████████████████████████*/
+
+
+/*╔═══════════════════════════════╗
+  ║ Static Exchange Evaluation    ║
+  ╚═══════════════════════════════╝*/
+  int SEE_PIECE_VALUES[] = {100, 300, 300, 500, 1200, 0, 0};
+  int QS_SEE_THRESHOLD = 0;
+  int SEE_MOVE_ORDERING_THRESHOLD = -82;
+  int SEE_QUIET_THRESHOLD = -67;
+  int SEE_NOISY_THRESHOLD = -32;
+  int SEE_DEPTH = 10;
+  
+  
+  /*╔═══════════════════════╗
+    ║ Null Move Pruning     ║
+    ╚═══════════════════════╝*/
+  int NMP_DEPTH = 3;  
+  int NMP_BASE_REDUCTION = 5120;
+  int NMP_DEPTH_MULTIPLIER = 256;
+  int NMP_REDUCTION_DEPTH_DIVISOR = 1024;
+  int NMP_EVAL_DIVISOR = 400;
+  
+  
+  /*╔═══════════════════════╗
+    ║ Late Move Reduction   ║
+    ╚═══════════════════════╝*/
+  int LMR_TABLE[2][maxPly][maxPly];
+  double LMR_TABLE_BASE_NOISY = 0.38;
+  double LMR_TABLE_NOISY_DIVISOR = 3.76;
+  double LMR_TABLE_BASE_QUIET = 1.01;
+  double LMR_TABLE_QUIET_DIVISOR = 2.32;
+  int LMR_FULL_DEPTH_MOVES = 2;
+  int LMR_REDUCTION_LIMIT = 3;
+  int DEEPER_LMR_MARGIN = 35;  
+  int QUIET_HISTORY_LMR_DIVISOR = 4096;
+  int QUIET_HISTORY_LMR_MINIMUM_SCALER = 3072;
+  int QUIET_HISTORY_LMR_MAXIMUM_SCALER = 3072;
+  int PAWN_HISTORY_LMR_DIVISOR = 4096;
+  int PAWN_HISTORY_LMR_MINIMUM_SCALER = 3072;
+  int PAWN_HISTORY_LMR_MAXIMUM_SCALER = 3072;
+  int NOISY_HISTORY_LMR_DIVISOR = 10240;  
+  int QUIET_NON_PV_LMR_SCALER = 1024;
+  int CUT_NODE_LMR_SCALER = 2048;
+  int TT_PV_LMR_SCALER = 1024;
+  int TT_PV_FAIL_LOW_LMR_SCALER = 1024;
+  int TT_CAPTURE_LMR_SCALER = 1024;
+  int GOOD_EVAL_LMR_SCALER = 1024;
+  int IMPROVING_LMR_SCALER = 1024;
+  int LMR_FUTILITY_OFFSET[] = {0, 164, 82, 41, 20, 10};
+  
+  
+  /*╔═══════════════════════╗
+    ║ Late Move Pruning     ║
+    ╚═══════════════════════╝*/
+  int LMP_BASE = 4;
+  int LMP_MULTIPLIER = 3;
+
+/*╔═════════════╗
+  ║   Probcut   ║
+  ╚═════════════╝*/
+  int PROBCUT_BETA_MARGIN = 150;
+  int PROBCUT_DEPTH = 5;
+  int PROBCUT_DEPTH_SUBTRACTOR = 4;
+  int PROBCUT_IMPROVING_MARGIN = 30;
+  int PROBCUT_SEE_NOISY_THRESHOLD = 100;
+  int PROBCUT_NOISY_HISTORY_DIVISOR = 10240;
+
+
+/*╔═══════════════════╗
+  ║   Small Probcut   ║
+  ╚═══════════════════╝*/
+  int SPROBCUT_BETA_MARGIN = 350;
+  int SPROBCUT_TT_DEPTH_SUBTRACTOR = 4;
+  
+  
+  /*╔════════════════════╗
+    ║ Futility Pruning   ║
+    ╚════════════════════╝*/
+  int FUTILITY_PRUNING_OFFSET[] = {0, 82, 41, 20, 10, 5};
+  int FP_DEPTH = 5;
+  int FP_MARGIN = 82;
+  
+  
+  /*╔══════════════════════════════╗
+    ║ Reverse Futility Pruning     ║
+    ╚══════════════════════════════╝*/
+  int RFP_MARGIN = 52;
+  int RFP_IMPROVING_MARGIN = 45;
+  int RFP_DEPTH = 11;
+  
+  
+  /*╔══════════╗
+    ║ Razoring ║
+    ╚══════════╝*/
+  int RAZORING_DEPTH = 3;
+  int RAZORING_FULL_MARGIN = 200;    
+  int RAZORING_DEPTH_SCALE = 15;
+  int RAZORING_VERIFY_MARGIN = 120;
+  int RAZORING_TRIM = 1;
+  int RAZORING_FULL_D = 2;
+  int RAZORING_VERIFY_D = 3;
+  int RAZORING_MARGIN[] = {0, 100, 200, 300, 400};
+  
+  
+  /*╔═════════════════════╗
+    ║ Singular Extensions ║
+    ╚═════════════════════╝*/
+  int SE_DEPTH = 5;
+  int SE_TT_DEPTH_SUBTRACTOR = 3;
+  // Positive Extensions
+  int DOUBLE_EXTENSION_MARGIN = -55;
+  int TRIPLE_EXTENSION_MARGIN = -60;
+  int QUADRUPLE_EXTENSION_MARGIN = 85;
+  // Negative Extensions
+  int DOUBLE_NEGATIVE_EXTENSION_MARGIN = 60;
+  int TRIPLE_NEGATIVE_EXTENSION_MARGIN = 90;
+  
+  /*╔═══════════════════════════════╗
+    ║ Internal Iterative Reductions ║
+    ╚═══════════════════════════════╝*/
+  int IIR_DEPTH = 8;
+  int IIR_TT_DEPTH_SUBTRACTOR = 3;
+
+  /*╔══════════════════════════════╗
+    ║      Aspiration Windows      ║
+    ╚══════════════════════════════╝*/
+  int ASP_WINDOW_BASE = 9;
+  int ASP_WINDOW_MIN_DEPTH = 4;
+  double ASP_WINDOW_MULTIPLIER = 1.8;
+
+  uint64_t nodes_spent_table[4096] = {0};  
+
+
+
+// position repetition detection
+int isRepetition(board* position) {
+    // loop over repetition indicies range
+    for (int index = 0; index < position->repetitionIndex; index++) {
+        // if we found the hash key same with a current
+        if (position->repetitionTable[index] == position->hashKey) {
+            // we found a repetition
+            return 1;
+        }
+    }
+
+    // if no repetition found
+    return 0;
+}
+
+// [depth][moveNumber]
+void initializeLMRTable(void) {
+    for (int depth = 1; depth < maxPly; ++depth) {
+        for (int moves = 1; moves < maxPly; ++moves) {
+            if (moves == 0 || depth == 0) {
+                LMR_TABLE[0][depth][moves] = 0;
+                LMR_TABLE[1][depth][moves] = 0;
+                continue;
+            }
+            LMR_TABLE[0][depth][moves] = LMR_TABLE_BASE_NOISY + log(depth) * log(moves) / LMR_TABLE_NOISY_DIVISOR; // noisy/tactical
+            LMR_TABLE[1][depth][moves] = LMR_TABLE_BASE_QUIET + log(depth) * log(moves) / LMR_TABLE_QUIET_DIVISOR; // quiet
+        }
+    }
+}
+
+void pick_next_move(int moveNum, moves *moveList, int *move_scores) {
+    int bestIndex = moveNum;
+    int bestScore = move_scores[moveNum];
+    int i = moveNum + 1;
+    int count = moveList->count;
+
+#if defined(__AVX2__)    
+    if (i + 8 <= count) {
+        __m256i best_val_v = _mm256_set1_epi32(bestScore);
+        __m256i best_idx_v = _mm256_set1_epi32(bestIndex);
+        __m256i cur_idx_v = _mm256_set_epi32(i + 7, i + 6, i + 5, i + 4, i + 3, i + 2, i + 1, i);
+        __m256i step_v = _mm256_set1_epi32(8);
+
+        for (; i + 8 <= count; i += 8) {
+            __m256i scores_v = _mm256_loadu_si256((__m256i const*)&move_scores[i]);
+            __m256i mask_v = _mm256_cmpgt_epi32(scores_v, best_val_v);
+
+            best_val_v = _mm256_blendv_epi8(best_val_v, scores_v, mask_v);
+            best_idx_v = _mm256_blendv_epi8(best_idx_v, cur_idx_v, mask_v);
+
+            cur_idx_v = _mm256_add_epi32(cur_idx_v, step_v);
+        }
+
+        // Horizontal reduction: 8 -> 4
+        __m128i vlink_l = _mm256_extracti128_si256(best_val_v, 0);
+        __m128i vlink_h = _mm256_extracti128_si256(best_val_v, 1);
+        __m128i ilink_l = _mm256_extracti128_si256(best_idx_v, 0);
+        __m128i ilink_h = _mm256_extracti128_si256(best_idx_v, 1);
+
+        // Stable selection: Prefer higher score, or lower index on tie
+        __m128i m_gt = _mm_cmpgt_epi32(vlink_h, vlink_l);
+        __m128i m_eq = _mm_cmpeq_epi32(vlink_h, vlink_l);
+        __m128i m_lt_idx = _mm_cmpgt_epi32(ilink_l, ilink_h); // lane_l index > lane_h index
+        __m128i m_use_h = _mm_or_si128(m_gt, _mm_and_si128(m_eq, m_lt_idx));
+
+        __m128i v128 = _mm_blendv_epi8(vlink_l, vlink_h, m_use_h);
+        __m128i i128 = _mm_blendv_epi8(ilink_l, ilink_h, m_use_h);
+
+        // Horizontal reduction: 4 -> 2
+        __m128i v_shuf = _mm_shuffle_epi32(v128, _MM_SHUFFLE(1, 0, 3, 2));
+        __m128i i_shuf = _mm_shuffle_epi32(i128, _MM_SHUFFLE(1, 0, 3, 2));
+        
+        m_gt = _mm_cmpgt_epi32(v_shuf, v128);
+        m_eq = _mm_cmpeq_epi32(v_shuf, v128);
+        m_lt_idx = _mm_cmpgt_epi32(i128, i_shuf);
+        m_use_h = _mm_or_si128(m_gt, _mm_and_si128(m_eq, m_lt_idx));
+
+        v128 = _mm_blendv_epi8(v128, v_shuf, m_use_h);
+        i128 = _mm_blendv_epi8(i128, i_shuf, m_use_h);
+
+        // Horizontal reduction: 2 -> 1
+        v_shuf = _mm_shuffle_epi32(v128, _MM_SHUFFLE(2, 3, 0, 1));
+        i_shuf = _mm_shuffle_epi32(i128, _MM_SHUFFLE(2, 3, 0, 1));
+        
+        m_gt = _mm_cmpgt_epi32(v_shuf, v128);
+        m_eq = _mm_cmpeq_epi32(v_shuf, v128);
+        m_lt_idx = _mm_cmpgt_epi32(i128, i_shuf);
+        m_use_h = _mm_or_si128(m_gt, _mm_and_si128(m_eq, m_lt_idx));
+
+        v128 = _mm_blendv_epi8(v128, v_shuf, m_use_h);
+        i128 = _mm_blendv_epi8(i128, i_shuf, m_use_h);
+
+        int finalScore = _mm_cvtsi128_si32(v128);
+        int finalIndex = _mm_cvtsi128_si32(i128);
+
+        if (finalScore > bestScore) {
+            bestScore = finalScore;
+            bestIndex = finalIndex;
+        }
+    }
+#elif defined(__SSE4_1__)
+    if (i + 4 <= count) {
+        __m128i best_val_v = _mm_set1_epi32(bestScore);
+        __m128i best_idx_v = _mm_set1_epi32(bestIndex);
+        __m128i cur_idx_v = _mm_set_epi32(i + 3, i + 2, i + 1, i);
+        __m128i step_v = _mm_set1_epi32(4);
+
+        for (; i + 4 <= count; i += 4) {
+            __m128i scores_v = _mm_loadu_si128((__m128i const*)&move_scores[i]);
+            __m128i mask_v = _mm_cmpgt_epi32(scores_v, best_val_v);
+
+            best_val_v = _mm_blendv_epi8(best_val_v, scores_v, mask_v);
+            best_idx_v = _mm_blendv_epi8(best_idx_v, cur_idx_v, mask_v);
+
+            cur_idx_v = _mm_add_epi32(cur_idx_v, step_v);
+        }
+
+        // Horizontal reduction: 4 -> 2
+        __m128i v_shuf = _mm_shuffle_epi32(best_val_v, _MM_SHUFFLE(1, 0, 3, 2));
+        __m128i i_shuf = _mm_shuffle_epi32(best_idx_v, _MM_SHUFFLE(1, 0, 3, 2));
+        
+        __m128i m_gt = _mm_cmpgt_epi32(v_shuf, best_val_v);
+        __m128i m_eq = _mm_cmpeq_epi32(v_shuf, best_val_v);
+        __m128i m_lt_idx = _mm_cmpgt_epi32(best_idx_v, i_shuf);
+        __m128i m_use_h = _mm_or_si128(m_gt, _mm_and_si128(m_eq, m_lt_idx));
+
+        __m128i v128 = _mm_blendv_epi8(best_val_v, v_shuf, m_use_h);
+        __m128i i128 = _mm_blendv_epi8(best_idx_v, i_shuf, m_use_h);
+
+        // Horizontal reduction: 2 -> 1
+        v_shuf = _mm_shuffle_epi32(v128, _MM_SHUFFLE(2, 3, 0, 1));
+        i_shuf = _mm_shuffle_epi32(i128, _MM_SHUFFLE(2, 3, 0, 1));
+        
+        m_gt = _mm_cmpgt_epi32(v_shuf, v128);
+        m_eq = _mm_cmpeq_epi32(v_shuf, v128);
+        m_lt_idx = _mm_cmpgt_epi32(i128, i_shuf);
+        m_use_h = _mm_or_si128(m_gt, _mm_and_si128(m_eq, m_lt_idx));
+
+        v128 = _mm_blendv_epi8(v128, v_shuf, m_use_h);
+        i128 = _mm_blendv_epi8(i128, i_shuf, m_use_h);
+
+        int finalScore = _mm_cvtsi128_si32(v128);
+        int finalIndex = _mm_cvtsi128_si32(i128);
+
+        if (finalScore > bestScore) {
+            bestScore = finalScore;
+            bestIndex = finalIndex;
+        }
+    }
+#endif
+
+    // Scalar fallback handles remainders and non-SIMD platforms
+    for (; i < count; i++) {
+        if (move_scores[i] > bestScore) {
+            bestScore = move_scores[i];
+            bestIndex = i;
+        }
+    }
+
+    if (bestIndex != moveNum) {
+        int tempScore = move_scores[moveNum];
+        move_scores[moveNum] = move_scores[bestIndex];
+        move_scores[bestIndex] = tempScore;
+
+        uint16_t tempMove = moveList->moves[moveNum];
+        moveList->moves[moveNum] = moveList->moves[bestIndex];
+        moveList->moves[bestIndex] = tempMove;
+    }
+}
+
+void init_move_scores(moves *moveList, int *move_scores, uint16_t tt_move, ThreadData *t, SearchStack *ss) {
+    for (int count = 0; count < moveList->count; count++) {
+        uint16_t current_move = moveList->moves[count];
+        
+        if (tt_move == current_move) {
+            move_scores[count] = 2000000000;
+        } else {
+            move_scores[count] = scoreMove(current_move, t, ss);
+        }
+    }
+}
+
+void init_quiescence_scores(moves *moveList, int *move_scores, board* position) {
+    for (int count = 0; count < moveList->count; count++) {
+        uint16_t move = moveList->moves[count];
+        
+        if (getMoveCapture(move)) {
+            int target_piece = P;
+            uint8_t bb_piece = position->mailbox[getMoveTarget(move)];
+            
+            if (bb_piece != NO_PIECE && getBit(position->bitboards[bb_piece], getMoveTarget(move))) {
+                target_piece = bb_piece;
+            }
+            
+            move_scores[count] = mvvLva[position->mailbox[getMoveSource(move)]][target_piece] + 1000000000;
+        } else {
+            move_scores[count] = 0;
+        }
+    }
+}
+
+/*  =======================
+         Move ordering
+    =======================
+
+    1. TT Move
+    2. PV Moves
+    3. Promotion Moves
+    4. Captures in MVV/LVA / SEE / Capture History / Recapture Bonus    
+    5. Quiet History / Continuation History / Pawn History
+*/
+
+// score moves
+int scoreMove(uint16_t move, ThreadData *t, SearchStack *ss) {
+    // make sure we are dealing with PV move
+    if (t->pos.scorePv && t->pos.pvTable[0][t->pos.ply] == move) {
+        // disable score PV flag
+        t->pos.scorePv = 0;
+
+        // give PV move the highest score to search it first
+        return 1500000000;
+    }
+
+    // score promotion move
+    if (getMovePromote(move)) {
+        switch (getMovePromotedPiece(t->pos.side, move)) {
+            case q:
+            case Q:
+                return 1000000000;
+                break;
+            case n:
+            case N:
+                return 800000000;
+                break;
+            case r:
+            case R:
+                return -500000000;
+                break;
+            case b:
+            case B:
+                return -800000000;
+                break;
+        }
+    }
+
+
+
+    // score capture move
+    if (getMoveCapture(move)) {
+        int captureScore = 0;
+
+        // init target piece
+        int target_piece = P;
+
+        uint8_t bb_piece = t->pos.mailbox[getMoveTarget(move)];
+        // if there's a piece on the target square
+        if (bb_piece != NO_PIECE &&
+            getBit(t->pos.bitboards[bb_piece], getMoveTarget(move))) {
+            target_piece = bb_piece;
+        }
+
+        int previous_move_target_square = getMoveTarget((ss - 1)->move);
+        int recapture_bonus = getMoveTarget(move) == previous_move_target_square ? 200000 : 0;
+
+        int piece = t->pos.mailbox[getMoveSource(move)];
+
+        int16_t move_history = t->search_d.captureHistory[piece][getMoveTarget(move)][t->pos.mailbox[getMoveTarget(move)]];
+
+        // score move by MVV LVA lookup [source piece][target piece]
+        captureScore += mvvLva[piece][target_piece];
+
+        captureScore += move_history;
+
+        captureScore += SEE(&t->pos, move, SEE_MOVE_ORDERING_THRESHOLD - move_history / 32) ? 1000000000 : -1000000;
+
+        captureScore += recapture_bonus;
+        
+        // NMP refutation move
+        //captureScore += getMoveTarget(move) == getMoveSource(position->nmp_refutation_move[position->ply]) ? 500000 : 0;
+
+        return captureScore;
+
+    }
+    // score quiet moves
+    else {
+        int quiet_score = 0;
+        quiet_score +=
+            // quiet main history 
+            t->search_d.quietHistory[t->pos.side][getMoveSource(move)][getMoveTarget(move)]
+            [is_square_threatened(&t->pos, getMoveSource(move))][is_square_threatened(&t->pos, getMoveTarget(move))];
+
+        // 1 ply continuation history
+        quiet_score += getContinuationHistoryScore(t, 1, move, ss);
+        // 2 ply continuation history
+        quiet_score += getContinuationHistoryScore(t, 2, move, ss);
+        // 4 ply continuation history
+        quiet_score += getContinuationHistoryScore(t, 4, move, ss);
+        // pawn history
+        quiet_score += thread_pool.shared_history.pawnHistory[t->pos.pawnKey % 2048][t->pos.mailbox[getMoveSource(move)]][getMoveTarget(move)];
+        // NMP refutation move
+        //quiet_score += getMoveSource(move) == getMoveTarget(position->nmp_refutation_move[position->ply]) ? 500000 : 0;
+
+        return quiet_score;
+    }
+    return 0;
+}
+
+
+// enable PV move scoring
+void enable_pv_scoring(moves *moveList, board* position) {
+    // disable following PV
+    position->followPv = 0;
+
+    // loop over the moves within a move list
+    for (int count = 0; count < moveList->count; count++) {
+        // make sure we hit PV move
+        if (position->pvTable[0][position->ply] == moveList->moves[count]) {
+            // enable move scoring
+            position->scorePv = 1;
+
+            // enable following PV
+            position->followPv = 1;
+        }
+    }
+}
+
+// print move
+void printMove(uint16_t move) {
+    if (getMovePromote(move)) {
+        printf("%s%s%c", squareToCoordinates[getMoveSource(move)],
+               squareToCoordinates[getMoveTarget(move)],
+               promotedPieces[getMovePromotedPiece(black, move)]);
+    } else {
+        printf("%s%s", squareToCoordinates[getMoveSource(move)],
+               squareToCoordinates[getMoveTarget(move)]);
+    }
+}
+
+int getLmrReduction(int depth, int moveNumber, bool isQuiet) {
+    return LMR_TABLE[isQuiet][myMIN(63, myMAX(depth, 0))][myMIN(63, moveNumber)];
+}
+
+uint8_t justPawns(board *pos) {
+    return !((pos->bitboards[N] | pos->bitboards[n] | pos->bitboards[B] |
+              pos->bitboards[b] | pos->bitboards[R] | pos->bitboards[r] |
+              pos->bitboards[Q] | pos->bitboards[q]) &
+             pos->occupancies[pos->side]);
+}
+
+
+int move_estimated_value(board *pos, uint16_t move) {
+
+    // Start with the value of the piece on the target square
+    int target_piece = pos->mailbox[getMoveTarget(move)] > 5
+                       ? pos->mailbox[getMoveTarget(move)] - 6
+                       : pos->mailbox[getMoveTarget(move)];
+
+    int value = SEE_PIECE_VALUES[target_piece];
+
+    // Factor in the new piece's value and remove our promoted pawn
+    if (getMovePromote(move))
+        value += SEE_PIECE_VALUES[getMovePromotedPiece(white, move)] - SEE_PIECE_VALUES[PAWN];
+
+        // Target square is encoded as empty for enpass moves
+    else if (getMoveEnpassant(move))
+        value = SEE_PIECE_VALUES[PAWN];
+
+        // We encode Castle moves as KxR, so the initial step is wrong
+    else if (getMoveCastling(move))
+        value = 0;
+
+    return value;
+}
+
+uint64_t all_attackers_to_square(board *pos, uint64_t occupied, int sq) {
+
+    // When performing a static exchange evaluation we need to find all
+    // attacks to a given square, but we also are given an updated occupied
+    // bitboard, which will likely not match the actual board, as pieces are
+    // removed during the iterations in the static exchange evaluation
+
+    return (getPawnAttacks(white, sq) & pos->bitboards[p]) |
+           (getPawnAttacks(black, sq) & pos->bitboards[P]) |
+           (getKnightAttacks(sq) & (pos->bitboards[n] | pos->bitboards[N])) |
+           (getBishopAttacks(sq, occupied) &
+            ((pos->bitboards[b] | pos->bitboards[B]) |
+             (pos->bitboards[q] | pos->bitboards[Q]))) |
+           (getRookAttacks(sq, occupied) &
+            ((pos->bitboards[r] | pos->bitboards[R]) |
+             (pos->bitboards[q] | pos->bitboards[Q]))) |
+           (getKingAttacks(sq) & (pos->bitboards[k] | pos->bitboards[K]));
+}
+
+int SEE(board *pos, uint16_t move, int threshold) {
+
+    int from, to, enpassant, promotion, colour, balance, nextVictim;
+    uint64_t bishops, rooks, occupied, attackers, myAttackers;
+
+    // Unpack move information
+    from = getMoveSource(move);
+    to = getMoveTarget(move);
+    enpassant = getMoveEnpassant(move);
+    promotion = getMovePromote(move);
+
+    // Next victim is moved piece or promotion type
+    nextVictim = promotion ? getMovePromotedPiece(white, move) : pos->mailbox[from];
+    nextVictim = nextVictim > 5 ? nextVictim - 6 : nextVictim;
+
+    // Balance is the value of the move minus threshold. Function
+    // call takes care for Enpass, Promotion and Castling moves.
+    balance = move_estimated_value(pos, move) - threshold;
+
+    // Best case still fails to beat the threshold
+    if (balance < 0)
+        return 0;
+
+    // Worst case is losing the moved piece
+    balance -= SEE_PIECE_VALUES[nextVictim];
+
+    // If the balance is positive even if losing the moved piece,
+    // the exchange is guaranteed to beat the threshold.
+    if (balance >= 0)
+        return 1;
+
+    // Grab sliders for updating revealed attackers
+    bishops = pos->bitboards[b] | pos->bitboards[B] | pos->bitboards[q] |
+              pos->bitboards[Q];
+    rooks = pos->bitboards[r] | pos->bitboards[R] | pos->bitboards[q] |
+            pos->bitboards[Q];
+
+    // Let occupied suppose that the move was actually made
+    occupied = pos->occupancies[both];
+    occupied = (occupied ^ (1ull << from)) | (1ull << to);
+    if (enpassant)
+        occupied ^= (1ull << pos->enpassant);
+    
+    attackers = all_attackers_to_square(pos, occupied, to) & occupied;
+    
+    U64 white_pinned = pos->pinned[white] & attackers;
+    U64 black_pinned = pos->pinned[black] & attackers;
+    U64 pinned = white_pinned | black_pinned;
+
+    
+    if (pinned) {
+        int white_king = getLS1BIndex(pos->bitboards[K]);
+        int black_king = getLS1BIndex(pos->bitboards[k]);
+
+        U64 white_mask = lineBB[white_king][to] | rayBB[white_king][to];
+        U64 black_mask = lineBB[black_king][to] | rayBB[black_king][to];
+
+        attackers &= ~pinned | (white_pinned & white_mask) | (black_pinned & black_mask);
+    }
+           
+
+    // Now our opponents turn to recapture
+    colour = pos->side ^ 1;
+
+    while (1) {
+        // If we have no more attackers left we lose
+        myAttackers = attackers & pos->occupancies[colour];
+        if (myAttackers == 0ull) {
+            break;
+        }
+
+        // Find our weakest piece to attack with
+        for (nextVictim = PAWN; nextVictim <= QUEEN; nextVictim++) {
+            if (myAttackers &
+                (pos->bitboards[nextVictim] | pos->bitboards[nextVictim + 6])) {
+                break;
+            }
+        }
+
+        // Remove this attacker from the occupied
+        occupied ^=
+                (1ull << getLS1BIndex(myAttackers & (pos->bitboards[nextVictim] |
+                                                     pos->bitboards[nextVictim + 6])));
+
+        // A diagonal move may reveal bishop or queen attackers
+        if (nextVictim == PAWN || nextVictim == BISHOP || nextVictim == QUEEN)
+            attackers |= getBishopAttacks(to, occupied) & bishops;
+
+        // A vertical or horizontal move may reveal rook or queen attackers
+        if (nextVictim == ROOK || nextVictim == QUEEN)
+            attackers |= getRookAttacks(to, occupied) & rooks;
+
+        // Make sure we did not add any already used attacks
+        attackers &= occupied;
+
+        // Swap the turn
+        colour = !colour;
+
+        // Negamax the balance and add the value of the next victim
+        balance = -balance - 1 - SEE_PIECE_VALUES[nextVictim];
+
+        // If the balance is non negative after giving away our piece then we win
+        if (balance >= 0) {
+
+            // As a slide speed up for move legality checking, if our last attacking
+            // piece is a king, and our opponent still has attackers, then we've
+            // lost as the move we followed would be illegal
+            if (nextVictim == KING && (attackers & pos->occupancies[colour]))
+                colour = colour ^ 1;
+
+            break;
+        }
+    }
+
+    // Side to move after the loop loses
+    return pos->side != colour;
+}
+
+
+uint8_t isMaterialDraw(board *pos) {
+    uint8_t piece_count = countBits(pos->occupancies[both]);
+
+    // K v K
+    if (piece_count == 2) {
+        return 1;
+    }
+    // Initialize knight and bishop count only after we check that piece count is
+    // higher then 2 as there cannot be a knight or bishop with 2 pieces on the
+    // board
+    uint8_t knight_count =
+            countBits(pos->bitboards[n] | pos->bitboards[N]);
+    // KN v K || KB v K
+    if (piece_count == 3 &&
+        (knight_count == 1 ||
+                countBits(pos->bitboards[b] | pos->bitboards[B]) == 1)) {
+        return 1;
+    } else if (piece_count == 4) {
+        // KNN v K || KN v KN
+        if (knight_count == 2) {
+            return 1;
+        }
+            // KB v KB
+        else if (countBits(pos->bitboards[b]) == 1 &&
+                countBits(pos->bitboards[B]) == 1) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void scaleTime(my_time* time, uint8_t bestMoveStability, uint8_t evalStability, uint16_t move, double complexity, ThreadData *t) {
+    double bestMoveScale[5] = {2.43, 1.35, 1.09, 0.88, 0.68};
+    double evalScale[5] = {1.25, 1.15, 1.00, 0.94, 0.88};
+    double complexityScale = my_max_double(0.77 + clamp_double(complexity, 0.0, 200.0) / 400.0, 1.0);
+    uint64_t total = load_rlx(t->search_i.nodes_searched);
+    double not_bm_nodes_fraction = total > 0 ?
+       (double)nodes_spent_table[move & 4095] / (double)total : 0.5;
+    double node_scaling_factor = (1.5f - not_bm_nodes_fraction) * 1.35f;
+    time->softLimit =
+            myMIN(time->starttime + time->baseSoft * bestMoveScale[bestMoveStability] * 
+                evalScale[evalStability] * node_scaling_factor * complexityScale, time->maxTime + time->starttime);    
+}
+
+bool has_enemy_any_threat(board *pos) {
+    return (pos->occupancies[pos->side] & pos->pieceThreats.stmThreats[pos->side ^ 1]) != 0;
+}
+
+int get_draw_score(ThreadData *t) {
+    return (load_rlx(t->search_i.nodes_searched) & 3) - 2; // Randomize between -2 and +2
+}
+
+// quiescence search
+int quiescence(int alpha, int beta, ThreadData *t, my_time* time, SearchStack *ss) {
+    board *position = &t->pos;
+
+    if (t->id == 0 || time->is_datagen) {
+        if (time->isNodeLimit) {
+            check_node_limit(time, t);
+        }
+        if ((load_rlx(t->search_i.nodes_searched) & 2047) == 0 && !time->is_datagen) {
+            communicate(time, position);
+        }
+    } else if (load_rlx(thread_pool.stop)) {
+        time->stopped = 1;
+    }
+
+    if (position->ply > maxPly - 1) {
+        // evaluate position
+        return evaluate(position);
+    }
+
+    int score = 0, bestScore = 0;
+
+    int pvNode = beta - alpha > 1;
+
+    //int rootNode = position->ply == 0;
+
+    if (position->ply > position->seldepth) {
+        position->seldepth = position->ply;
+    }
+
+
+    uint16_t bestMove = 0;
+    uint16_t tt_move = 0;
+    int16_t tt_score = 0;
+    uint8_t tt_hit = 0;
+    uint8_t tt_depth = 0;
+    uint8_t tt_flag = hashFlagExact;
+    bool tt_pv = pvNode;
+
+    // read hash entry
+    if (position->ply &&
+        (tt_hit =
+                 readHashEntry(position, &tt_move, &tt_score, &tt_depth, &tt_flag, &tt_pv, position->fifty)) && !pvNode) {
+        if ((tt_flag == hashFlagExact) ||
+            ((tt_flag == hashFlagBeta) && (tt_score <= alpha)) ||
+            ((tt_flag == hashFlagAlpha) && (tt_score >= beta))) {
+             return tt_score >= beta ? (tt_score * 3 + beta) / 4 :
+                                          tt_score;
+        }
+    }
+
+    // evaluate position
+    int evaluation = evaluate(position);
+
+    evaluation = adjust_eval_with_corrhist(t, evaluation, ss);
+
+    score = bestScore = tt_hit ? tt_score : evaluation;
+
+    // fail-hard beta cutoff
+    if (evaluation >= beta) {
+        // node (move) fails high
+        return evaluation;
+    }
+
+
+    // found a better move
+    if (evaluation > alpha) {
+        // PV node (move)
+        alpha = evaluation;
+    }
+
+    // create move list instance
+    moves moveList[1];
+
+    // generate moves
+    noisyGenerator(moveList, position);
+
+    int futilityValue = bestScore + 100;
+
+    // legal moves counter
+    //int legal_moves = 0;
+
+    int move_scores[256];
+    init_quiescence_scores(moveList, move_scores, position);
+
+    // loop over moves within a movelist
+    for (int count = 0; count < moveList->count; count++) {
+        pick_next_move(count, moveList, move_scores);
+        uint16_t move = moveList->moves[count];
+
+        if (bestScore > -mateFound) {
+            if (!SEE(position, move, QS_SEE_THRESHOLD)) {
+                continue;
+            }
+
+            if (getMoveCapture(move) && futilityValue <= alpha && !SEE(position, move, 1)) {
+                bestScore = myMAX(bestScore, futilityValue);
+                continue;
+            }
+        }
+        
+        struct copyposition copyPosition;
+        // preserve board state
+        copyBoard(position, &copyPosition);
+
+        // increment ply
+        position->ply++;
+
+        // increment repetition index & store hash key
+        position->repetitionIndex++;
+        position->repetitionTable[position->repetitionIndex] = position->hashKey;
+
+        // make sure to make only legal moves
+        if (makeMove(moveList->moves[count], onlyCaptures, position) == 0) {
+            // decrement ply
+            position->ply--;
+
+            // decrement repetition index
+            position->repetitionIndex--;
+
+            // skip to next move
+            continue;
+        }
+
+        //legal_moves++;
+
+        // increment nodes count
+        inc_rlx(t->search_i.nodes_searched);
+
+        prefetch_hash_entry(position->hashKey, position->fifty);
+
+        // score current move
+        score = -quiescence(-beta, -alpha, t, time, ss + 1);
+
+        // decrement ply
+        position->ply--;
+
+        // decrement repetition index
+        position->repetitionIndex--;
+
+        // take move back
+        takeBack(position, &copyPosition);
+
+        if (time->stopped == 1) return 0;
+
+
+        if (score > bestScore) {
+            bestScore = score;
+            // found a better move
+            if (score > alpha) {
+                //bestMove = moveList->moves[count];
+
+                //hashFlag = hashFlagExact;
+                alpha = score;
+            }
+
+            if (score >= beta) {
+                //writeHashEntry(beta, bestMove, 0, hashFlagBeta, position);
+                // node (move) fails high
+                break;
+            }
+        }
+    }
+
+    uint8_t hashFlag = hashFlagNone;
+    if (alpha >= beta) {
+        hashFlag = hashFlagAlpha;
+    } else {
+        hashFlag = hashFlagBeta;
+    }
+
+
+    // store hash entry with the score equal to alpha
+    writeHashEntry(position->hashKey, bestScore, bestMove, 0, hashFlag, tt_pv, position, position->fifty);
+
+    // node (move) fails low
+    return bestScore;
+}
+
+
+// negamax alpha beta search
+int negamax(int alpha, int beta, int depth, ThreadData *t, my_time* time, SearchStack *ss, bool cutNode) {
+    board *pos = &t->pos;
+
+    if (t->id == 0 && (load_rlx(t->search_i.nodes_searched) & 4095) == 0 && time->isNodeLimit) {
+        check_node_limit(time, t);
+    }
+    if (t->id == 0) {
+        if ((load_rlx(t->search_i.nodes_searched) & 2047) == 0) {
+            communicate(time, pos);
+        }
+    } else if (load_rlx(thread_pool.stop)) {
+        time->stopped = 1;
+    }
+
+    if (pos->ply > maxPly - 1) {
+        // evaluate position
+        return evaluate(pos);
+    }
+    // init PV length
+    pos->pvLength[pos->ply] = pos->ply;
+
+    if (pos->ply > pos->seldepth) {
+        pos->seldepth = pos->ply;
+    }
+
+
+    // variable to store current move's score (from the static evaluation perspective)
+    int score = 0;
+
+    depth = myMIN(depth, maxPly - 1);
+
+
+    int pvNode = beta - alpha > 1;
+
+    int rootNode = pos->ply == 0;
+
+    uint16_t bestMove = 0;
+    uint64_t pos_key = 0;
+    uint16_t tt_move = 0;
+    int16_t tt_score = 0;
+    uint8_t tt_hit = 0;
+    uint8_t tt_depth = 0;
+    uint8_t tt_flag = hashFlagExact;
+    bool tt_pv = pvNode;    
+
+    // Check for fifty-move rule
+    if (pos->fifty >= 100) {
+        int in_check = isSquareAttacked((pos->side == white) ? getLS1BIndex(pos->bitboards[K]) :
+                                    getLS1BIndex(pos->bitboards[k]),
+                                    pos->side ^ 1, pos);
+        if (!in_check) {
+            // return draw by fifty-move rule
+            return get_draw_score(t);
+        }       
+    }
+
+    if (!rootNode) {
+
+        if (isRepetition(pos) || isMaterialDraw(pos)) {
+            return get_draw_score(t);
+        }        
+
+
+        // Mate distance pruning
+        alpha = myMAX(alpha, -mateValue + (int)pos->ply);
+        beta = myMIN(beta, mateValue - (int)pos->ply - 1);
+        if (alpha >= beta)
+            return alpha;
+    }
+
+    // read hash entry
+    if (!ss->singular_move && !rootNode &&
+        (tt_hit =
+                readHashEntry(pos, &tt_move, &tt_score, &tt_depth, &tt_flag, &tt_pv, pos->fifty)) &&
+                !pvNode) {
+        pos_key = pos->hashKey;
+        if (tt_depth >= depth) {
+            if ((tt_flag == hashFlagExact) ||
+                ((tt_flag == hashFlagBeta) && (tt_score <= alpha)) ||
+                ((tt_flag == hashFlagAlpha) && (tt_score >= beta))) {
+                return tt_score >= beta ? (tt_score * 3 + beta) / 4 :
+                                          tt_score;
+            }
+        }
+    }
+
+
+    // recursion escapre condition
+    if (depth <= 0)
+        // run quiescence search
+        return quiescence(alpha, beta, t, time, ss);        
+
+    // is king in check
+    int in_check = isSquareAttacked((pos->side == white) ? getLS1BIndex(pos->bitboards[K]) :
+                                    getLS1BIndex(pos->bitboards[k]),
+                                    pos->side ^ 1, pos);
+    
+
+    // get static evaluation score
+    int raw_eval = evaluate(pos);
+
+    int static_eval = adjust_eval_with_corrhist(t, raw_eval, ss);
+
+    bool improving = false;
+    bool tt_capture = tt_move && getMoveCapture(tt_move);
+
+    bool corrplexity = abs(raw_eval - static_eval) > 82;
+    int corrplexity_value = abs(raw_eval - static_eval);
+    int correction_value = get_correction_value(t, ss);    
+
+    ss->staticEval = static_eval;    
+
+    improving = !in_check && (ss - 2)->staticEval != noEval && ss->staticEval > (ss - 2)->staticEval;
+
+    // Internal Iterative Reductions
+    if ((pvNode || cutNode) && depth >= IIR_DEPTH && (!tt_move || tt_depth < depth - IIR_TT_DEPTH_SUBTRACTOR)) {
+        depth--;
+    }
+
+    int ttAdjustedEval = static_eval;
+
+    if (!ss->singular_move && tt_move && !in_check &&
+        (tt_flag == hashFlagExact ||
+         (tt_flag == hashFlagAlpha && tt_score >= static_eval) ||
+         (tt_flag == hashFlagBeta && tt_score <= static_eval))) {
+
+        ttAdjustedEval = tt_score;
+    }
+
+    improving |= ss->staticEval >= beta + 100;
+
+    uint16_t rfpMargin = improving ? RFP_IMPROVING_MARGIN * (depth - 1) : RFP_MARGIN * depth;
+
+    rfpMargin += 6 * depth * depth;
+
+    bool rfp_tt_pv_decision = !tt_pv || (tt_pv && tt_hit && tt_score >= beta + 90 - 15 * ((tt_depth + depth) / 2));    
+
+    // Reverse Futility Pruning
+    if (!ss->singular_move && rfp_tt_pv_decision &&
+        depth <= RFP_DEPTH && !pvNode && !in_check && (!tt_hit || ttAdjustedEval != static_eval) &&
+        ttAdjustedEval - rfpMargin >= beta + corrplexity * 20)
+        return ttAdjustedEval;
+
+    // Null Move Pruning
+    if (!ss->singular_move && depth >= NMP_DEPTH && !in_check && !rootNode &&
+            ttAdjustedEval >= beta + 75 &&
+            pos->ply >= pos->nmpPly &&
+            !justPawns(pos)) {
+        struct copyposition copyPosition;
+        // preserve board state
+        copyBoard(pos, &copyPosition);
+
+        pos->ply++;
+
+        // increment repetition index & store hash key
+        pos->repetitionIndex++;
+        pos->repetitionTable[pos->repetitionIndex] = pos->hashKey;
+
+        // hash enpassant if available
+        if (pos->enpassant != no_sq) { pos->hashKey ^= enpassantKeys[pos->enpassant]; }
+
+        // reset enpassant capture square
+        pos->enpassant = no_sq;
+
+        // switch the side, literally giving opponent an extra move to make
+        pos->side ^= 1;
+
+        // hash the side
+        pos->hashKey ^= sideKey;
+
+        prefetch_hash_entry(pos->hashKey, pos->fifty);
+
+        int R = (NMP_BASE_REDUCTION + depth * NMP_DEPTH_MULTIPLIER) / NMP_REDUCTION_DEPTH_DIVISOR;
+
+        R += myMIN((ttAdjustedEval - beta) / NMP_EVAL_DIVISOR, 3);        
+
+        /* search moves with reduced depth to find beta cutoffs
+           depth - R where R is a reduction limit */
+        score = -negamax(-beta, -beta + 1, depth - R, t, time, ss + 1, !cutNode);
+
+        // decrement ply
+        pos->ply--;
+
+        // decrement repetition index
+        pos->repetitionIndex--;
+
+        // restore board state
+        takeBack(pos, &copyPosition);
+
+
+        if (time->stopped == 1) return 0;
+
+        // fail-hard beta cutoff
+        if (score >= beta) {
+
+            // if there is any unproven mate don't return but we can still return beta
+            if (score > mateValue) {
+                score = beta;
+            }
+
+            if (pos->nmpPly || depth < 15) {
+                ss->move = 0;
+                ss->piece = 0;
+                return score;
+            }
+
+            if (score >= beta + 30) {
+                ss->move = 0;
+                ss->piece = 0;
+                return score;
+            }
+                
+            pos->nmpPly = pos->ply + (depth - R) * 2 / 2;
+            int verificationScore = -negamax(beta - 1, beta, depth - R, t, time, ss, false);
+            pos->nmpPly = 0;
+
+            if (verificationScore >= beta) {
+                ss->move = 0;
+                ss->piece = 0;
+                return score;
+            }
+        }
+
+        // Refutation, our opponent has an argument
+        if (score < beta) {
+            // store null move refutation move
+            ss->nmp_refutation_move = ss->move;
+
+            uint16_t nmp_ref_move = ss->nmp_refutation_move;
+            int nmp_depth = depth - R;
+
+            if (!isTactical(nmp_ref_move)) {
+                int refutation_bonus = 100 + 50 * nmp_depth;
+                adjust_single_quiet_hist_entry(t, pos->side, nmp_ref_move, refutation_bonus);
+            }
+        }
+    }    
+
+    // razoring
+    if (!ss->singular_move &&
+        !pvNode && !in_check && depth <= RAZORING_DEPTH) {
+        int max_razor_index = 4;
+        int razor_depth = myMIN(myMIN(depth, RAZORING_DEPTH), max_razor_index);
+
+        if (razor_depth > 0) {
+            const int margin = RAZORING_MARGIN[razor_depth];
+
+            if (ttAdjustedEval + margin <= alpha) {
+                const bool allow_full_razor = depth == 1 ||
+                (depth <= RAZORING_FULL_D && ttAdjustedEval + margin + RAZORING_FULL_MARGIN <= alpha);
+
+                if (allow_full_razor) {
+                    return quiescence(alpha, beta, t, time, ss);
+                }
+
+                const int capped_alpha = myMAX(alpha - margin, -mateValue);
+                const int razor_alpha = capped_alpha;
+                const int razor_beta = razor_alpha + 1;
+                int razor_score = quiescence(razor_alpha, razor_beta, t, time, ss);
+
+                // We proved a fail low.
+                if (razor_score <= razor_alpha) {                       
+                    return razor_score;
+                }
+
+                if (razor_score >= razor_beta + RAZORING_VERIFY_MARGIN && depth <= RAZORING_VERIFY_D) {                    
+                    depth -= myMIN(RAZORING_TRIM, depth - 1);
+                }
+            }
+        }
+    }
+
+    // legal moves counter
+    int legal_moves = 0;
+
+    int probcut_beta = beta + PROBCUT_BETA_MARGIN - PROBCUT_IMPROVING_MARGIN * improving;
+    if (!pvNode && !in_check && depth >= PROBCUT_DEPTH && abs(beta) < mateValue  && !ss->singular_move &&
+        (!tt_hit || tt_depth + 3 < depth || tt_score >= probcut_beta)) {
+            moves capture_promos[1];
+            capture_promos->count = 0;
+            int probcut_depth = depth - PROBCUT_DEPTH_SUBTRACTOR;
+
+            noisyGenerator(capture_promos, pos);
+
+            int move_scores[256];
+            init_move_scores(capture_promos, move_scores, tt_move, t, ss);
+            for (int count = 0; count < capture_promos->count; count++) {
+                pick_next_move(count, capture_promos, move_scores);
+                uint16_t move = capture_promos->moves[count];
+                int move_history =
+                t->search_d.captureHistory[pos->mailbox[getMoveSource(move)]][getMoveTarget(move)][pos->mailbox[getMoveTarget(move)]];
+
+                if (!SEE(pos, move, PROBCUT_SEE_NOISY_THRESHOLD)) {
+                    continue;
+                }
+
+                // Noisy Futility Pruning
+                int noisyFPMargin = static_eval + 164 + 100 * depth;
+                if (!pvNode && !in_check && noisyFPMargin <= alpha) {
+                    continue;
+                }
+
+                struct copyposition copyPosition;
+                // preserve board state
+                copyBoard(pos, &copyPosition);
+                // increment ply
+                pos->ply++;
+
+                // increment repetition index & store hash key
+                pos->repetitionIndex++;
+                pos->repetitionTable[pos->repetitionIndex] = pos->hashKey;
+
+                // make sure to make only legal moves
+                if (makeMove(capture_promos->moves[count], allMoves, pos) == 0) {
+                    // decrement ply
+                    pos->ply--;
+
+                    // decrement repetition index
+                    pos->repetitionIndex--;
+
+                    // skip to next move
+                    continue;
+                }
+
+                prefetch_hash_entry(pos->hashKey, pos->fifty);
+                inc_rlx(t->search_i.nodes_searched);
+                legal_moves++;
+
+
+                int probcut_value = -quiescence(-probcut_beta, -probcut_beta + 1, t, time, ss + 1);
+
+                if (probcut_value >= probcut_beta) {
+                    int adjusted_probcut_depth = probcut_depth * 1024;
+
+                    // Capture History based reduction
+                    adjusted_probcut_depth += move_history / PROBCUT_NOISY_HISTORY_DIVISOR * 256;
+
+                    adjusted_probcut_depth -= 1024 * cutNode;
+
+                    adjusted_probcut_depth /= 1024;
+
+                    probcut_value = -negamax(-probcut_beta, -probcut_beta + 1, adjusted_probcut_depth, t, time, ss + 1, !cutNode);
+                }
+
+                // decrement ply
+                pos->ply--;
+
+                // decrement repetition index
+                pos->repetitionIndex--;
+
+                // take move back
+                takeBack(pos, &copyPosition);
+
+                if (probcut_value >= probcut_beta) {
+                    writeHashEntry(pos->hashKey, probcut_value, move, probcut_depth, hashFlagAlpha, tt_pv, pos, pos->fifty);
+                    return probcut_value;
+                }
+            }
+    }
+
+    int small_probcut_beta = beta + SPROBCUT_BETA_MARGIN;
+    
+    // Small Probcut
+    if (!ss->singular_move && !pvNode && tt_flag == hashFlagAlpha && tt_depth >= depth - SPROBCUT_TT_DEPTH_SUBTRACTOR &&
+        tt_score >= small_probcut_beta && abs(tt_score) < mateValue && abs(beta) < mateValue) {
+            return small_probcut_beta;            
+    }
+
+    bool enemy_has_no_threats = !has_enemy_any_threat(pos);
+
+
+    // create move list instance
+    moves moveList[1], badQuiets[1], noisyMoves[1];
+    badQuiets->count = 0;
+    noisyMoves->count = 0;
+
+    // generate moves
+    moveGenerator(moveList, pos);
+
+    // if we are now following PV line
+    if (pos->followPv)
+        // enable PV move scoring
+        enable_pv_scoring(moveList, pos);
+
+    
+    update_pinned(pos);
+
+    int move_scores[256];
+    init_move_scores(moveList, move_scores, tt_move, t, ss);
+
+    // number of moves searched in a move list
+    int moves_searched = 0;
+
+    int bestScore = -infinity;    
+
+    // legal moves counter
+    legal_moves = 0;
+
+    // quiet move counter
+    int quietMoves = 0;
+
+    // capture move counter
+    //int captureMoves = 0;
+
+    const int originalAlpha = alpha;
+
+    // loop over moves within a movelist
+    for (int count = 0; count < moveList->count; count++) {
+        pick_next_move(count, moveList, move_scores);
+        uint16_t currentMove = moveList->moves[count];
+
+        if (currentMove == ss->singular_move) {
+            continue;
+        }
+
+        bool isCapture = getMoveCapture(currentMove) != 0;
+        bool isPromotion = getMovePromote(currentMove) != 0;
+        bool tactical = isCapture || isPromotion;
+        bool notTactical = !tactical;
+
+        int pawnHistoryValue = notTactical ? thread_pool.shared_history.pawnHistory[pos->pawnKey % 2048][pos->mailbox[getMoveSource(currentMove)]][getMoveTarget(currentMove)] : 0;
+
+        int moveHistory = notTactical ? t->search_d.quietHistory[pos->side][getMoveSource(currentMove)][getMoveTarget(currentMove)]
+                                        [is_square_threatened(pos, getMoveSource(currentMove))][is_square_threatened(pos, getMoveTarget(currentMove))] +
+                getContinuationHistoryScore(t, 1, currentMove, ss) + getContinuationHistoryScore(t, 4, currentMove, ss): 
+                t->search_d.captureHistory[pos->mailbox[getMoveSource(currentMove)]][getMoveTarget(currentMove)][pos->mailbox[getMoveTarget(currentMove)]];
+
+        int lmrDepth = myMAX(0, depth - getLmrReduction(depth, legal_moves, notTactical) + (moveHistory / 8192 * notTactical));
+
+
+        bool isNotMated = bestScore > -mateFound;
+
+        if (!rootNode && notTactical && isNotMated) {
+
+            int lmpThreshold = (LMP_BASE + LMP_MULTIPLIER * lmrDepth * lmrDepth) / (2 - improving);
+            int history_adj = moveHistory / 64;
+            history_adj = clamp(history_adj, -6, 6);
+            lmpThreshold += history_adj;
+
+            // Late Move Pruning
+            if (legal_moves>= lmpThreshold) {
+                continue;
+            }
+
+            // Futility Pruning
+            if (lmrDepth <= FP_DEPTH && !in_check && (static_eval + FUTILITY_PRUNING_OFFSET[clamp(lmrDepth, 1, 5)]) + FP_MARGIN * lmrDepth + moveHistory / 32 <= alpha) {
+                continue;
+            }
+            // Quiet History Pruning
+            if (lmrDepth <= 4 && !in_check && moveHistory < lmrDepth * lmrDepth * -2048) {
+                break;
+            }
+
+        }
+
+        // SEE PVS Pruning
+        int seeThreshold =
+                notTactical ? SEE_QUIET_THRESHOLD * lmrDepth - moveHistory / 96 : SEE_NOISY_THRESHOLD * lmrDepth * lmrDepth;
+        if (lmrDepth <= SEE_DEPTH && legal_moves > 0 && !SEE(pos, currentMove, seeThreshold))
+            continue;
+
+        int previous_move_target_square = getMoveTarget((ss - 1)->move);
+        int extensions = 0;
+
+        // Singular Extensions
+        if (pos->ply < depth * 2 && !rootNode && depth >= SE_DEPTH + tt_pv && currentMove == tt_move && !ss->singular_move &&
+            tt_depth >= depth - SE_TT_DEPTH_SUBTRACTOR && tt_flag != hashFlagBeta &&
+            abs(tt_score) < mateValue) {
+            const int singularBeta = tt_score - (depth * 5 + (tt_pv && !pvNode) * 10) / 8;
+            const int singularDepth = (depth - 1) / 2;
+
+
+            struct copyposition copyPosition;
+            // preserve board state
+            copyBoard(pos, &copyPosition);
+
+            // make sure to make only legal moves
+            if (makeMove(moveList->moves[count], allMoves, pos) == 0) {
+                continue;
+            }
+
+            ss->singular_move = currentMove;
+
+            // take move back
+            takeBack(pos, &copyPosition);            
+
+            const int singularScore =
+                    negamax(singularBeta - 1, singularBeta, singularDepth, t, time, ss, cutNode);
+            
+            ss->singular_move = 0;
+
+            // Singular Extension
+            if (singularScore < singularBeta) {
+                extensions++;
+
+                int correction_adj = abs(correction_value) / 2875;                
+
+                // Double Extension                
+                /*int doubleMargin = DOUBLE_EXTENSION_MARGIN - (moveHistory / 512) - (pawnHistoryValue / 384) - (corrplexity_value / 16);
+                doubleMargin -= correction_adj;
+                doubleMargin += isCapture * 75;
+                doubleMargin += isPromotion * 0; 
+                doubleMargin += tactical * 40;
+                doubleMargin -= ss->singular_ply * 25;*/
+
+                if (!pvNode) {
+                    extensions++;
+
+                    // Low Depth Extension
+                    depth += depth < 10;
+                }
+
+                // Triple Extension
+                int tripleMargin = TRIPLE_EXTENSION_MARGIN - (moveHistory / 512 * notTactical);
+                tripleMargin -= correction_adj;
+                tripleMargin += isCapture * 100;
+                tripleMargin += isPromotion * 0;
+                tripleMargin += tactical * 80;
+                
+
+                if (singularScore <= singularBeta - tripleMargin) {
+                    extensions++;
+                }
+                
+                // ╔═══════════════════════════╗
+                // ║            /\             ║
+                // ║           /  \            ║
+                // ║         <SCALER>          ║
+                // ║           \  /            ║
+                // ║            \/             ║
+                // ╟    «-·´¯`·.¸¸.»·´¯`·-»    ╢
+                // ║    Scaling STC / LTC      ║
+                // ║   STC:  0.93  +-  1.94    ║
+                // ║   LTC: 14.05  +-  7.19    ║
+                // ╚═══════════════════════════╝
+
+                // ~~~~ Quadruple Extension ~~~~ //
+                int quadrupleMargin = QUADRUPLE_EXTENSION_MARGIN + 170 * !notTactical;
+
+                if (singularScore <= singularBeta - quadrupleMargin) {
+                    extensions++;
+                }
+            }            
+
+            // Negative Extensions
+            else if (tt_score >= beta) {
+                extensions -= 2 + !pvNode;
+            }
+
+            // ╔══════════════════════════════╗
+            // ║              /\              ║
+            // ║             /  \             ║
+            // ║           <SCALER>           ║
+            // ║             \  /             ║
+            // ║              \/              ║
+            // ╟      «-·´¯`·.¸¸.»·´¯`·-»     ╢        
+            // ║                              ║
+            // ║     STC:   -1.42  +-  3.69   ║
+            // ║     LTC:   -6.85  +-  5.03   ║
+            // ║    VLTC:    0.71  +-  2.94   ║
+            // ║   VVLTC:    5.13  +-  4.04   ║            
+            // ╚══════════════════════════════╝
+
+            // ~~~~ Recapture Extension ~~~~ //
+            else if (pvNode && !notTactical && getMoveTarget(tt_move) == previous_move_target_square) {
+                extensions += 1;
+            }
+            
+            // Cut Node Extension
+            else if (cutNode) {
+                extensions -= 2;
+            }
+        }
+
+        struct copyposition copyPosition;
+        // preserve board state
+        copyBoard(pos, &copyPosition);
+
+        // increment ply
+        pos->ply++;
+
+        // increment repetition index & store hash key
+        pos->repetitionIndex++;
+        pos->repetitionTable[pos->repetitionIndex] = pos->hashKey;
+
+        // make sure to make only legal moves
+        if (makeMove(moveList->moves[count], allMoves, pos) == 0) {
+            // decrement ply
+            pos->ply--;
+
+            // decrement repetition index
+            pos->repetitionIndex--;
+
+            // skip to next move
+            continue;
+        }
+
+
+        // increment nodes count
+        inc_rlx(t->search_i.nodes_searched);
+
+        prefetch_hash_entry(pos->hashKey, pos->fifty);
+
+        // increment legal moves
+        legal_moves++;
+
+        if (notTactical) {
+            (ss + 1)->move = currentMove;
+            (ss + 1)->piece = copyPosition.mailbox[getMoveSource(currentMove)];
+            addMoveToHistoryList(badQuiets, currentMove);
+            quietMoves++;
+        } else {
+            (ss + 1)->move = currentMove;
+            (ss + 1)->piece = copyPosition.mailbox[getMoveSource(currentMove)];
+            //captureMoves++;
+            addMoveToHistoryList(noisyMoves, currentMove);
+        }
+
+        uint64_t nodes_before_search = (t->id == 0) ? load_rlx(t->search_i.nodes_searched) : 0;
+
+        int new_depth = depth - 1 + extensions;
+
+        int lmrReduction = getLmrReduction(depth, legal_moves, notTactical) * 1024;
+
+        /* All Moves */
+
+        // Reduce More
+        if (cutNode) {
+            lmrReduction += CUT_NODE_LMR_SCALER + !tt_move * 1024;
+        }
+
+        if (tt_pv && tt_hit && tt_score <= alpha) {
+            lmrReduction += TT_PV_FAIL_LOW_LMR_SCALER;
+        }
+
+        if (tt_hit && tt_capture) {
+            lmrReduction += TT_CAPTURE_LMR_SCALER;
+        }
+
+        if (enemy_has_no_threats && !in_check && static_eval - 365 > beta) {
+            lmrReduction += GOOD_EVAL_LMR_SCALER;
+        }
+
+        // ╔══════════════════════════════╗
+        // ║              /\              ║
+        // ║             /  \             ║
+        // ║           <SCALER>           ║
+        // ║             \  /             ║
+        // ║              \/              ║
+        // ╟      «-·´¯`·.¸¸.»·´¯`·-»     ╢        
+        // ║                              ║
+        // ║     STC:  -3.12  +-  3.95    ║
+        // ║     LTC:   0.71  +-  1.28    ║
+        // ║    VLTC:   6.87  +-  4.51    ║
+        // ║                              ║
+        // ╚══════════════════════════════╝
+
+        if (!improving && !in_check) {
+            lmrReduction += IMPROVING_LMR_SCALER;
+        }
+
+        if (notTactical) {
+            // Reduce More
+            if (!pvNode && quietMoves >= 4) {
+                lmrReduction += QUIET_NON_PV_LMR_SCALER;
+            }
+
+            // Futility LMR
+            lmrReduction += (static_eval + 164 + 82 * depth <= alpha && !in_check) * 1024;
+
+
+            // if the move have good history decrease reduction other hand the move have bad history then reduce more
+            int moveHistoryReduction = moveHistory / QUIET_HISTORY_LMR_DIVISOR;
+            lmrReduction -= clamp(moveHistoryReduction * 1024, -QUIET_HISTORY_LMR_MINIMUM_SCALER, QUIET_HISTORY_LMR_MAXIMUM_SCALER);
+
+            // pawn history based reduction, same logic as the quiet history
+            int pawnHistoryReduction = pawnHistoryValue / PAWN_HISTORY_LMR_DIVISOR;            
+            lmrReduction -= clamp(pawnHistoryReduction * 1024, -PAWN_HISTORY_LMR_MINIMUM_SCALER, PAWN_HISTORY_LMR_MAXIMUM_SCALER);
+        }
+        // Noisy Moves
+        else { 
+            // capture history based reduction, same logic as the quiet history
+            lmrReduction -= moveHistory / NOISY_HISTORY_LMR_DIVISOR;
+        }
+
+        // Reduce Less
+        if (tt_pv) {
+            lmrReduction -= TT_PV_LMR_SCALER + (512 * pvNode) + (256 * improving);
+        }
+        
+
+        lmrReduction /= 1024;
+
+        int reduced_depth = myMAX(1, myMIN(new_depth - lmrReduction, new_depth)) + pvNode;
+
+        if(moves_searched >= LMR_FULL_DEPTH_MOVES &&
+           depth >= LMR_REDUCTION_LIMIT) {
+
+            score = -negamax(-alpha - 1, -alpha, reduced_depth, t, time, ss + 1, true);
+
+            if (score > alpha && lmrReduction != 0) {
+                bool doDeeper = score > bestScore + DEEPER_LMR_MARGIN;
+                bool historyReduction = notTactical ? moveHistory / 16384 : 0;
+                bool doShallower = score < bestScore + new_depth;
+                new_depth -= doShallower;
+                new_depth += doDeeper;
+                new_depth -= historyReduction;
+                score = -negamax(-alpha - 1, -alpha, new_depth, t, time, ss + 1, !cutNode);
+            }
+        }
+        else if (!pvNode || legal_moves > 1) {
+            // if we have chance about to dive into quiescence search then extend
+            if (currentMove == tt_move && pos->rootDepth > 8 && tt_depth > 1) {
+                new_depth = myMAX(new_depth, 1);
+            }
+            
+            score = -negamax(-alpha - 1, -alpha, new_depth, t, time, ss + 1, !cutNode);
+        }
+
+        if (pvNode && (legal_moves == 1 || score > alpha)) {
+            if (!rootNode && currentMove == tt_move && tt_score < alpha && tt_flag == hashFlagBeta) {
+                new_depth -= 1;
+            }
+
+            // if we have chance about to dive into quiescence search then extend
+            if (currentMove == tt_move && pos->rootDepth > 8 && tt_depth > 1) {
+                new_depth = myMAX(new_depth, 1);
+            }
+            
+            // do normal alpha beta search
+            score = -negamax(-beta, -alpha, new_depth, t, time, ss + 1, false);
+        }
+
+        // decrement ply
+        pos->ply--;
+
+        // decrement repetition index
+        pos->repetitionIndex--;
+
+        // take move back
+        takeBack(pos, &copyPosition);
+
+        if (rootNode && t->id == 0) {
+            nodes_spent_table[currentMove & 4095] += load_rlx(t->search_i.nodes_searched) - nodes_before_search;
+        }
+
+        if (time->stopped == 1) return 0;
+
+        // increment the counter of moves searched so far
+        moves_searched++;
+
+        // found a better move
+        if (score > bestScore) {
+            bestScore = score;
+
+            if (score > alpha) {
+                // store best move (for TT or anything)
+                bestMove = currentMove;
+
+                // PV node (move)
+                alpha = score;
+
+                if (pvNode) {
+                    // write PV move
+                    pos->pvTable[pos->ply][pos->ply] = currentMove;
+
+                    // loop over the next ply
+                    for (int next_ply = pos->ply + 1; next_ply < pos->pvLength[pos->ply + 1]; next_ply++)
+                        // copy move from deeper ply into a current ply's line
+                        pos->pvTable[pos->ply][next_ply] = pos->pvTable[pos->ply + 1][next_ply];
+
+                    // adjust PV length
+                    pos->pvLength[pos->ply] = pos->pvLength[pos->ply + 1];
+                }
+
+                // fail-hard beta cutoff
+                if (score >= beta) {
+                    if (notTactical) {
+                        int quiet_history_score = 
+                        t->search_d.quietHistory[pos->side][getMoveSource(currentMove)][getMoveTarget(currentMove)]
+                        [is_square_threatened(pos, getMoveSource(currentMove))][is_square_threatened(pos, getMoveTarget(currentMove))];
+
+                        int history_depth = depth * 1024;
+
+                        history_depth += (!in_check && ttAdjustedEval <= alpha) * 1024;
+
+                        history_depth /= 1024;
+
+                        updateQuietMoveHistory(t, bestMove, pos->side, history_depth, badQuiets);
+                        updateContinuationHistory(t, bestMove, history_depth, badQuiets, quiet_history_score, ss);
+                        updatePawnHistory(t, bestMove, history_depth, badQuiets);
+                        
+                    } else { // noisy moves
+                        updateCaptureHistory(t, bestMove, depth);
+                    }
+
+                    // always penalize bad noisy moves
+                    updateCaptureHistoryMalus(t, depth, noisyMoves, bestMove);
+
+                    // node (move) fails high
+                    break;
+                }
+            }
+        }
+    }
+
+    // we don't have any legal moves to make in the current postion
+    if (legal_moves == 0) {
+        // king is in check
+        if (in_check)
+            // return mating score (assuming closest distance to mating pos)
+            return -mateValue + pos->ply;
+
+            // king is not in check
+        else
+            // return stalemate score
+            return get_draw_score(t);
+    }
+
+    if (!ss->singular_move) {
+        uint8_t hashFlag = hashFlagExact;
+        if (alpha >= beta) {
+            hashFlag = hashFlagAlpha;
+        } else if (alpha <= originalAlpha) {
+            hashFlag = hashFlagBeta;
+        }
+
+        if (!in_check && (bestMove == 0 || !getMoveCapture(bestMove)) &&
+            !(hashFlag == hashFlagAlpha && bestScore <= static_eval) &&
+            !(hashFlag == hashFlagBeta && bestScore >= static_eval)) {
+
+            int corrhistBonus = clamp(bestScore - static_eval, -CORRHIST_LIMIT, CORRHIST_LIMIT);
+            update_pawn_correction_hist(t, depth, corrhistBonus);
+            update_minor_correction_hist(t, depth, corrhistBonus);
+            update_major_correction_hist(t, depth, corrhistBonus);
+            update_non_pawn_corrhist(t, depth, corrhistBonus);
+            update_continuation_corrhist(t, depth, corrhistBonus, ss);
+            update_king_rook_pawn_corrhist(t, depth, corrhistBonus);
+        }
+
+        // store hash entry with the score equal to alpha
+        writeHashEntry(pos_key, bestScore, bestMove, depth, hashFlag, tt_pv, pos, pos->fifty);
+    }
+    // node (move) fails low
+    return bestScore;
+}
+
+// search position for the best move
+int searchPosition(int depth, bool benchmark, ThreadData *t, my_time* time) {
+    SearchStack *ss = t->ss;
+    int score = 0;
+
+    // reset "time is up" flag
+    time->stopped = 0;
+
+    // reset nodes counter
+    store_rlx(t->search_i.nodes_searched, 0);
+
+    // reset follow PV flags
+    t->pos.followPv = 0;
+    t->pos.scorePv = 0;
+    
+    if (t->id == 0) {
+        memset(nodes_spent_table, 0, sizeof(nodes_spent_table));
+    }
+    memset(t->pos.pvTable, 0, sizeof(t->pos.pvTable));
+    memset(t->pos.pvLength, 0, sizeof(t->pos.pvLength));    
+
+    // define initial alpha beta bounds
+    int alpha = -infinity;
+    int beta = infinity;
+
+    int totalTime = 0;
+    // set root depth
+    t->pos.rootDepth = 0;
+    t->pos.ply = 0;
+
+    int previousBestMove = 0;
+    uint8_t bestMoveStability = 0;
+    int averageScore = noEval;
+    uint8_t evalStability = 0;
+    int baseSearchScore = -infinity;
+
+    quiet_history_aging();    
+
+    // iterative deepening
+    for (int current_depth = 1; current_depth <= depth; current_depth++) {
+        //printf("Node limit: %llu\n", time->isNodeLimit ? time->node_limit : 0);
+        if (time->stopped == 1) {
+            break;
+        }
+
+        for (int i = 0; i < maxPly; ++i) {
+            (ss + i)->singular_move = 0;
+            (ss + i)->staticEval = noEval;
+            (ss + i)->piece = 0;
+            (ss + i)->move = 0;
+        }
+
+        t->pos.seldepth = 0;
+        t->pos.rootDepth = current_depth;
+
+
+        int startTime = getTimeMiliSecond();
+
+        if (time->is_datagen) {
+            check_node_limit(time, t);
+        } else {
+            if (t->id == 0 && ((time->timeset && startTime >= time->softLimit && t->pos.pvTable[0][0] != 0) || (time->isNodeLimit && total_nodes() >= time->node_limit))) {
+                time->stopped = 1;
+                store_rlx(thread_pool.stop, true);
+            } else if (load_rlx(thread_pool.stop)) {
+                time->stopped = 1;
+            }
+        }
+
+        int window = ASP_WINDOW_BASE;
+        int aspirationWindowDepth = current_depth;
+
+        while (true) {
+
+            if (time->is_datagen) {
+                check_node_limit(time, t);
+            } else {
+                if (t->id == 0 && ((time->timeset && (startTime >= time->softLimit) && t->pos.pvTable[0][0] != 0) || (time->isNodeLimit && total_nodes() >= time->node_limit))) {
+                    time->stopped = 1;
+                    store_rlx(thread_pool.stop, true);
+                } else if (load_rlx(thread_pool.stop)) {
+                    time->stopped = 1;
+                }
+            }
+
+            if (time->stopped == 1) {
+                break;
+            }
+
+            if (current_depth >= ASP_WINDOW_MIN_DEPTH) {
+                alpha = myMAX(-infinity, score - window);
+                beta = myMIN(infinity, score + window);
+            }
+
+            t->pos.followPv = 1;
+            // find best move within a given position
+            int current_score = negamax(alpha, beta, myMAX(aspirationWindowDepth, 1), t, time, ss, false);
+            
+            if (time->stopped == 1) {
+                break;
+            }
+            
+            score = current_score;
+
+            if (score == infinity) {
+                // Restore the saved best line
+                memset(t->pos.pvTable, 0, sizeof(t->pos.pvTable));
+                memset(t->pos.pvLength, 0, sizeof(t->pos.pvLength));
+                // Break out of the loop without printing info about the unfinished
+                // depth
+                break;
+            }
+            if (score <= alpha) {
+                alpha = myMAX(-infinity, alpha - window);
+                aspirationWindowDepth = current_depth;
+            }
+
+            else if (score >= beta) {
+                int exceed = score - beta;
+
+                beta = myMIN(infinity, beta + window);
+                aspirationWindowDepth = myMAX(aspirationWindowDepth - 1, current_depth - 5);
+
+                // If we failed high significantly (at least delta), increase delta more
+                if (exceed) {
+                    window += window / 4;
+                }
+
+            } else {
+                break;
+            }
+            window *= 1.8f;
+
+        }
+
+        baseSearchScore = current_depth == 1 ? score : baseSearchScore;
+        averageScore = averageScore == noEval ? score : (averageScore + score) / 2;
+
+
+        if (t->pos.pvTable[0][0] == previousBestMove) {
+            bestMoveStability = myMIN(bestMoveStability + 1, 4);
+        } else {
+            previousBestMove = t->pos.pvTable[0][0];
+            bestMoveStability = 0;
+        }
+
+        if (score > averageScore - 10 && score < averageScore + 10) {
+            evalStability = myMIN(evalStability + 1, 4);
+        } else {
+            evalStability = 0;
+        }
+
+        // Complexity TM
+        double complexity = 0;
+        if (abs(score) < mateValue) {
+            complexity = 0.6 * abs(baseSearchScore - score) * log(depth);
+        }
+
+        if (t->id == 0 && time->timeset && current_depth > 6) {
+            scaleTime(time, bestMoveStability, evalStability, t->pos.pvTable[0][0], complexity, t);
+        }
+        
+        int endTime = getTimeMiliSecond();
+        totalTime += endTime - startTime;
+
+        if (t->id == 0 && t->pos.pvLength[0] && !benchmark) {
+            uint64_t nodes = total_nodes();
+            unsigned long long nps = (totalTime > 0) ? (nodes * 1000) / totalTime : 0;
+
+            printf("info depth %d seldepth %d ", current_depth, t->pos.seldepth);
+
+            if (is_mate_score(score))
+                printf("score mate %d nodes %llu nps %llu hashfull %d time %d pv ",
+                       (score > 0 ? mateValue - score + 1 : -mateValue - score) / 2,
+                       nodes, nps, hash_full(), totalTime);            
+            else
+                printf("score cp %d nodes %llu nps %llu hashfull %d time %d pv ",
+                       score, nodes, nps, hash_full(), totalTime);
+
+            // loop over the moves within a PV line
+            for (int count = 0; count < t->pos.pvLength[0]; count++) {
+                printMove(t->pos.pvTable[0][count]);
+                printf(" ");
+            }
+            // print new line
+            printf("\n");
+        }
+
+    }
+    if (t->id == 0 && !benchmark) {
+        // best move placeholder
+        printf("bestmove ");
+        printMove(t->pos.pvTable[0][0]);
+        printf("\n");
+    }
+    return score;
+}

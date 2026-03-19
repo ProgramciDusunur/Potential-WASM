@@ -1,0 +1,26 @@
+#ifndef POTENTIAL_BIT_MANIPULATION_H
+#define POTENTIAL_BIT_MANIPULATION_H
+
+#pragma once
+
+#include <stdio.h>
+
+
+#define myAbs(x) ((x) < 0 ? -(x) : (x))
+
+
+#define U64 unsigned long long
+
+#define popBit(bitboard, square) ((bitboard) &= ~(1ULL << (square)))
+#define setBit(bitboard, square) bitboard |= (1ULL << square)
+#define getBit(bitboard, square) bitboard & (1ULL << square)
+
+int countBits(U64 bitboard);
+int getLS1BIndex(U64 bitboard);
+void printBitboard(U64 bitboard);
+U64 setOccupancy(int index, int bitsInMask, U64 attackMask);
+
+
+
+
+#endif

@@ -1,0 +1,19 @@
+//
+// Created by erena on 13.09.2024.
+//
+
+#ifndef POTENTIAL_BENCH_H
+#define POTENTIAL_BENCH_H
+
+#pragma once
+
+#include "bit_manipulation.h"
+#include <stdio.h>
+#include "search.h"
+#include "timeman.h"
+#include "fen.h"
+
+extern char* benchmarkfens[52];
+void benchmark(int depth, ThreadData *t, my_time* time);
+
+#endif //POTENTIAL_BENCH_H

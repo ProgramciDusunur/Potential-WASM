@@ -1,0 +1,88 @@
+//
+// Created by erena on 13.09.2024.
+//
+
+#ifndef POTENTIAL_EVALUATION_H
+#define POTENTIAL_EVALUATION_H
+
+#pragma once
+
+#include "bit_manipulation.h"
+#include "mask.h"
+#include "move.h"
+#include "values.h"
+#include <stdbool.h>
+
+
+/**********************************\
+ ==================================
+
+             Evaluation
+
+ ==================================
+\**********************************/
+
+
+/*
+    ♙ =   100   = ♙
+    ♘ =   300   = ♙ * 3
+    ♗ =   350   = ♙ * 3 + ♙ * 0.5
+    ♖ =   500   = ♙ * 5
+    ♕ =   1000  = ♙ * 10
+    ♔ =   10000 = ♙ * 100
+
+*/
+
+
+// game phases
+enum {
+    opening, endgame, middlegame
+};
+
+// piece types
+enum {
+    PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING
+};
+
+// Mirror Score Array
+extern const int mirrorScore[128];
+
+// Material Scores
+extern const int material_score[2][12];
+
+// SEE Material Array
+extern const int seeMaterial[12];
+
+// Positional Piece Scores
+extern const int positional_score[2][6][64];
+
+// File and Mobility Scores
+extern const int semi_open_file_score;
+extern const int open_file_score;
+extern const int king_semi_open_file_score;
+extern const int king_open_file_score;
+extern const int rook_file_score;
+
+// King's Bonuses
+extern const int king_shield_bonus_middlegame ;
+extern const int king_shield_bonus_endgame;
+extern const int king_distance_bonus;
+
+// Game Phase Scores
+extern const int opening_phase_score;
+extern const int endgame_phase_score;
+
+extern int mg_table[12][64]; // [piece][square] -> midgame score
+extern int eg_table[12][64]; // [piece][square] -> endgame score
+extern const int piece_scores[13];
+
+
+int get_game_phase_score(const board* position);
+int get_piece_phase_score(uint8_t piece);
+void get_threats(int side, board* pos);
+void init_tables();
+int evaluate(board* position);
+void clearStaticEvaluationHistory(SearchStack* ss);
+bool is_square_threatened(board *pos, int square);
+
+#endif //POTENTIAL_EVALUATION_H

@@ -1,0 +1,10 @@
+# Datagen output
+datagen/
+UHO_Lichess_4852_v1.epd
+fens_1m.epd
+
+# Build artifacts
+*.exe
+*.o
+*.d
+.tmp/

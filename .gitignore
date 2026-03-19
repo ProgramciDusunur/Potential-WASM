@@ -1,0 +1,17 @@
+# Compiled WASM distribution
+/dist/
+
+# Engine build artifacts
+/source/.tmp/
+/source/Source/
+/source/*.o
+/source/*.d
+/source/*.exe
+/source/tuner
+/source/tuner.exe
+
+# Local configuration & temporary files
+.tmp/
+*.log
+Thumbs.db
+Desktop.ini

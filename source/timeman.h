@@ -1,0 +1,29 @@
+#ifndef POTENTIAL_TIME_H
+#define POTENTIAL_TIME_H
+
+#pragma once
+
+#include "structs.h"
+
+#ifdef WIN64
+
+#include <windows.h>
+#include <stdbool.h>
+
+#else
+#include <sys/time.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <unistd.h>
+
+
+#endif
+
+void initTimeControl(my_time* time);
+void resetTimeControl(my_time* time);
+int getTimeMiliSecond();
+int input_waiting();
+
+
+
+#endif //POTENTIAL_TIME_H
