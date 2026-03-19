@@ -10,8 +10,16 @@
 /source/tuner
 /source/tuner.exe
 
+# Data files (EPD/Books)
+*.epd
+*.bin
+*.pt
+/source/datagen/
+
 # Local configuration & temporary files
 .tmp/
 *.log
 Thumbs.db
 Desktop.ini
+test_access.txt
+web_adaptations.patch
