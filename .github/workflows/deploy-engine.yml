@@ -18,7 +18,9 @@ jobs:
 
       - name: Build Engine
         run: |
-          emcc source/*.c -o potential.js \
+          # Filter out tuner.c as it contains its own 'main' and 'evaluate' functions
+          SOURCES=$(ls source/*.c | grep -v "tuner.c" | tr '\n' ' ')
+          emcc $SOURCES -o potential.js \
           -O3 -flto -funroll-loops -fomit-frame-pointer -fno-exceptions -fno-rtti -msimd128 -msse4.1 \
           -s WASM=1 -s ALLOW_MEMORY_GROWTH=1 -s STACK_SIZE=268435456 -s INITIAL_MEMORY=536870912 -s MAXIMUM_MEMORY=1073741824 \
           -s MODULARIZE=1 -s EXPORT_NAME="PotentialEngine" -s EXPORTED_FUNCTIONS="['_main', '_free', '_malloc']" -s EXPORTED_RUNTIME_METHODS="['ccall', 'cwrap']" \
