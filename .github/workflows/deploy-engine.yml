@@ -1,0 +1,39 @@
+name: Build and Deploy Engine
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+
+      - name: Build Engine
+        run: |
+          emcc source/*.c -o potential.js \
+          -O3 -flto -funroll-loops -fomit-frame-pointer -fno-exceptions -fno-rtti -msimd128 -msse4.1 \
+          -s WASM=1 -s ALLOW_MEMORY_GROWTH=1 -s STACK_SIZE=268435456 -s INITIAL_MEMORY=536870912 -s MAXIMUM_MEMORY=1073741824 \
+          -s MODULARIZE=1 -s EXPORT_NAME="PotentialEngine" -s EXPORTED_FUNCTIONS="['_main', '_free', '_malloc']" -s EXPORTED_RUNTIME_METHODS="['ccall', 'cwrap']" \
+          -D NDEBUG
+
+      - name: Prepare Deployment
+        run: |
+          mkdir deploy
+          cp potential.js potential.wasm deploy/
+
+      - name: Deploy to dist branch
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./deploy
+          publish_branch: dist
+          user_name: 'github-actions[bot]'
+          user_email: 'github-actions[bot]@users.noreply.github.com'
