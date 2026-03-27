@@ -5,6 +5,7 @@
 #include "search.h"
 #include <ctype.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #if defined(__AVX2__) || defined(__SSE4_1__)
 #include <immintrin.h>
@@ -52,19 +53,20 @@
   int LMR_REDUCTION_LIMIT = 3;
   int DEEPER_LMR_MARGIN = 35;  
   int QUIET_HISTORY_LMR_DIVISOR = 4096;
-  int QUIET_HISTORY_LMR_MINIMUM_SCALER = 3072;
-  int QUIET_HISTORY_LMR_MAXIMUM_SCALER = 3072;
+  int QUIET_HISTORY_LMR_MINIMUM_SCALAR = 3072;
+  int QUIET_HISTORY_LMR_MAXIMUM_SCALAR = 3072;
   int PAWN_HISTORY_LMR_DIVISOR = 4096;
-  int PAWN_HISTORY_LMR_MINIMUM_SCALER = 3072;
-  int PAWN_HISTORY_LMR_MAXIMUM_SCALER = 3072;
+  int PAWN_HISTORY_LMR_MINIMUM_SCALAR = 3072;
+  int PAWN_HISTORY_LMR_MAXIMUM_SCALAR = 3072;
   int NOISY_HISTORY_LMR_DIVISOR = 10240;  
-  int QUIET_NON_PV_LMR_SCALER = 1024;
-  int CUT_NODE_LMR_SCALER = 2048;
-  int TT_PV_LMR_SCALER = 1024;
-  int TT_PV_FAIL_LOW_LMR_SCALER = 1024;
-  int TT_CAPTURE_LMR_SCALER = 1024;
-  int GOOD_EVAL_LMR_SCALER = 1024;
-  int IMPROVING_LMR_SCALER = 1024;
+  int QUIET_NON_PV_LMR_SCALAR = 1024;
+  int CUT_NODE_LMR_SCALAR = 2048;
+  int TT_PV_LMR_SCALAR = 1024;
+  int TT_PV_FAIL_LOW_LMR_SCALAR = 1024;
+  int TT_CAPTURE_LMR_SCALAR = 1024;
+  int GOOD_EVAL_LMR_SCALAR = 1024;
+  int IMPROVING_LMR_SCALAR = 1024;
+  int GIVES_CHECK_LMR_SCALAR = 1024;
   int LMR_FUTILITY_OFFSET[] = {0, 164, 82, 41, 20, 10};
   
   
@@ -127,7 +129,7 @@
   int SE_DEPTH = 5;
   int SE_TT_DEPTH_SUBTRACTOR = 3;
   // Positive Extensions
-  int DOUBLE_EXTENSION_MARGIN = -55;
+  int DOUBLE_EXTENSION_MARGIN = 0;
   int TRIPLE_EXTENSION_MARGIN = -60;
   int QUADRUPLE_EXTENSION_MARGIN = 85;
   // Negative Extensions
@@ -662,36 +664,50 @@ int SEE(board *pos, uint16_t move, int threshold) {
     return pos->side != colour;
 }
 
-
 uint8_t isMaterialDraw(board *pos) {
+    // early exit: pawns, rooks or queens on the board
+    if (pos->bitboards[P] | pos->bitboards[p] |
+        pos->bitboards[R] | pos->bitboards[r] |
+        pos->bitboards[Q] | pos->bitboards[q]) {
+        return 0;
+    }
+
+    // only kings, knights and bishops remain
     uint8_t piece_count = countBits(pos->occupancies[both]);
 
-    // K v K
-    if (piece_count == 2) {
+    // KvK, KNvK, KBvK
+    if (piece_count < 4) {
         return 1;
     }
-    // Initialize knight and bishop count only after we check that piece count is
-    // higher then 2 as there cannot be a knight or bishop with 2 pieces on the
-    // board
-    uint8_t knight_count =
-            countBits(pos->bitboards[n] | pos->bitboards[N]);
-    // KN v K || KB v K
-    if (piece_count == 3 &&
-        (knight_count == 1 ||
-                countBits(pos->bitboards[b] | pos->bitboards[B]) == 1)) {
-        return 1;
-    } else if (piece_count == 4) {
-        // KNN v K || KN v KN
-        if (knight_count == 2) {
-            return 1;
-        }
-            // KB v KB
-        else if (countBits(pos->bitboards[b]) == 1 &&
-                countBits(pos->bitboards[B]) == 1) {
-            return 1;
-        }
+
+    if (piece_count != 4) {
+        return 0;
     }
-    return 0;
+
+    // piece_count == 4: side to move has only 1 minor piece -> draw
+    // covers KNvKN, KBvKB, KBvKN, KNvKB
+    U64 our_minor = pos->side == white
+        ? (pos->bitboards[N] | pos->bitboards[B])
+        : (pos->bitboards[n] | pos->bitboards[b]);
+    if (countBits(our_minor) == 1) {
+        return 1;
+    }
+
+    U64 all_bishops = pos->bitboards[B] | pos->bitboards[b];
+    U64 all_knights = pos->bitboards[N] | pos->bitboards[n];
+
+    // KNNvK
+    if (!all_bishops) {
+        return 1;
+    }
+
+    // KBNvK: checkmate is possible
+    if (all_knights) {
+        return 0;
+    }
+
+    // KBBvK: draw only if both bishops are on the same color
+    return !(all_bishops & LIGHT_SQUARES) || !(all_bishops & ~LIGHT_SQUARES);
 }
 
 void scaleTime(my_time* time, uint8_t bestMoveStability, uint8_t evalStability, uint16_t move, double complexity, ThreadData *t) {
@@ -844,7 +860,8 @@ int quiescence(int alpha, int beta, ThreadData *t, my_time* time, SearchStack *s
         // increment nodes count
         inc_rlx(t->search_i.nodes_searched);
 
-        prefetch_hash_entry(position->hashKey, position->fifty);
+        prefetch_hash_entry(position->hashKey, position->fifty);        
+        prefetch_corrhist(position);
 
         // score current move
         score = -quiescence(-beta, -alpha, t, time, ss + 1);
@@ -936,7 +953,7 @@ int negamax(int alpha, int beta, int depth, ThreadData *t, my_time* time, Search
     uint64_t pos_key = 0;
     uint16_t tt_move = 0;
     int16_t tt_score = 0;
-    uint8_t tt_hit = 0;
+    bool tt_hit = false;
     uint8_t tt_depth = 0;
     uint8_t tt_flag = hashFlagExact;
     bool tt_pv = pvNode;    
@@ -953,7 +970,6 @@ int negamax(int alpha, int beta, int depth, ThreadData *t, my_time* time, Search
     }
 
     if (!rootNode) {
-
         if (isRepetition(pos) || isMaterialDraw(pos)) {
             return get_draw_score(t);
         }        
@@ -967,10 +983,10 @@ int negamax(int alpha, int beta, int depth, ThreadData *t, my_time* time, Search
     }
 
     // read hash entry
-    if (!ss->singular_move && !rootNode &&
-        (tt_hit =
-                readHashEntry(pos, &tt_move, &tt_score, &tt_depth, &tt_flag, &tt_pv, pos->fifty)) &&
-                !pvNode) {
+    tt_hit = !ss->singular_move && !rootNode && readHashEntry(pos, &tt_move, &tt_score, &tt_depth, &tt_flag, &tt_pv, pos->fifty);
+
+    // read hash entry
+    if (tt_hit && !pvNode) {
         pos_key = pos->hashKey;
         if (tt_depth >= depth) {
             if ((tt_flag == hashFlagExact) ||
@@ -1066,7 +1082,8 @@ int negamax(int alpha, int beta, int depth, ThreadData *t, my_time* time, Search
         // hash the side
         pos->hashKey ^= sideKey;
 
-        prefetch_hash_entry(pos->hashKey, pos->fifty);
+        prefetch_hash_entry(pos->hashKey, pos->fifty);        
+        prefetch_corrhist(pos);
 
         int R = (NMP_BASE_REDUCTION + depth * NMP_DEPTH_MULTIPLIER) / NMP_REDUCTION_DEPTH_DIVISOR;
 
@@ -1220,7 +1237,9 @@ int negamax(int alpha, int beta, int depth, ThreadData *t, my_time* time, Search
                     continue;
                 }
 
-                prefetch_hash_entry(pos->hashKey, pos->fifty);
+                prefetch_hash_entry(pos->hashKey, pos->fifty);                
+                prefetch_corrhist(pos);
+                
                 inc_rlx(t->search_i.nodes_searched);
                 legal_moves++;
 
@@ -1315,6 +1334,7 @@ int negamax(int alpha, int beta, int depth, ThreadData *t, my_time* time, Search
         bool isPromotion = getMovePromote(currentMove) != 0;
         bool tactical = isCapture || isPromotion;
         bool notTactical = !tactical;
+        bool gives_check = move_gives_check(currentMove, pos);
 
         int pawnHistoryValue = notTactical ? thread_pool.shared_history.pawnHistory[pos->pawnKey % 2048][pos->mailbox[getMoveSource(currentMove)]][getMoveTarget(currentMove)] : 0;
 
@@ -1328,7 +1348,7 @@ int negamax(int alpha, int beta, int depth, ThreadData *t, my_time* time, Search
 
         bool isNotMated = bestScore > -mateFound;
 
-        if (!rootNode && notTactical && isNotMated) {
+        if (!rootNode && notTactical && isNotMated && !gives_check) {
 
             int lmpThreshold = (LMP_BASE + LMP_MULTIPLIER * lmrDepth * lmrDepth) / (2 - improving);
             int history_adj = moveHistory / 64;
@@ -1338,10 +1358,16 @@ int negamax(int alpha, int beta, int depth, ThreadData *t, my_time* time, Search
             // Late Move Pruning
             if (legal_moves>= lmpThreshold) {
                 continue;
-            }
+            }            
+            int futility_margin = 
+                static_eval + 
+                FUTILITY_PRUNING_OFFSET[clamp(lmrDepth, 1, 5)] + 
+                FP_MARGIN * lmrDepth + 
+                moveHistory / 32;
+            
 
             // Futility Pruning
-            if (lmrDepth <= FP_DEPTH && !in_check && (static_eval + FUTILITY_PRUNING_OFFSET[clamp(lmrDepth, 1, 5)]) + FP_MARGIN * lmrDepth + moveHistory / 32 <= alpha) {
+            if (lmrDepth <= FP_DEPTH && !in_check && futility_margin <= alpha) {
                 continue;
             }
             // Quiet History Pruning
@@ -1401,12 +1427,13 @@ int negamax(int alpha, int beta, int depth, ThreadData *t, my_time* time, Search
                 doubleMargin += tactical * 40;
                 doubleMargin -= ss->singular_ply * 25;*/
 
-                if (!pvNode) {
+                int doubleMargin = DOUBLE_EXTENSION_MARGIN;
+                if (!pvNode && singularScore <= singularBeta - doubleMargin) {
                     extensions++;
-
-                    // Low Depth Extension
-                    depth += depth < 10;
                 }
+
+                // Low Depth Extension
+                depth += depth < 10 && !pvNode;
 
                 // Triple Extension
                 int tripleMargin = TRIPLE_EXTENSION_MARGIN - (moveHistory / 512 * notTactical);
@@ -1497,7 +1524,8 @@ int negamax(int alpha, int beta, int depth, ThreadData *t, my_time* time, Search
         // increment nodes count
         inc_rlx(t->search_i.nodes_searched);
 
-        prefetch_hash_entry(pos->hashKey, pos->fifty);
+        prefetch_hash_entry(pos->hashKey, pos->fifty);    
+        prefetch_corrhist(pos);
 
         // increment legal moves
         legal_moves++;
@@ -1524,19 +1552,19 @@ int negamax(int alpha, int beta, int depth, ThreadData *t, my_time* time, Search
 
         // Reduce More
         if (cutNode) {
-            lmrReduction += CUT_NODE_LMR_SCALER + !tt_move * 1024;
+            lmrReduction += CUT_NODE_LMR_SCALAR + !tt_move * 1024;
         }
 
         if (tt_pv && tt_hit && tt_score <= alpha) {
-            lmrReduction += TT_PV_FAIL_LOW_LMR_SCALER;
+            lmrReduction += TT_PV_FAIL_LOW_LMR_SCALAR;
         }
 
         if (tt_hit && tt_capture) {
-            lmrReduction += TT_CAPTURE_LMR_SCALER;
+            lmrReduction += TT_CAPTURE_LMR_SCALAR;
         }
 
         if (enemy_has_no_threats && !in_check && static_eval - 365 > beta) {
-            lmrReduction += GOOD_EVAL_LMR_SCALER;
+            lmrReduction += GOOD_EVAL_LMR_SCALAR;
         }
 
         // ╔══════════════════════════════╗
@@ -1554,13 +1582,13 @@ int negamax(int alpha, int beta, int depth, ThreadData *t, my_time* time, Search
         // ╚══════════════════════════════╝
 
         if (!improving && !in_check) {
-            lmrReduction += IMPROVING_LMR_SCALER;
+            lmrReduction += IMPROVING_LMR_SCALAR;
         }
 
         if (notTactical) {
             // Reduce More
             if (!pvNode && quietMoves >= 4) {
-                lmrReduction += QUIET_NON_PV_LMR_SCALER;
+                lmrReduction += QUIET_NON_PV_LMR_SCALAR;
             }
 
             // Futility LMR
@@ -1569,11 +1597,11 @@ int negamax(int alpha, int beta, int depth, ThreadData *t, my_time* time, Search
 
             // if the move have good history decrease reduction other hand the move have bad history then reduce more
             int moveHistoryReduction = moveHistory / QUIET_HISTORY_LMR_DIVISOR;
-            lmrReduction -= clamp(moveHistoryReduction * 1024, -QUIET_HISTORY_LMR_MINIMUM_SCALER, QUIET_HISTORY_LMR_MAXIMUM_SCALER);
+            lmrReduction -= clamp(moveHistoryReduction * 1024, -QUIET_HISTORY_LMR_MINIMUM_SCALAR, QUIET_HISTORY_LMR_MAXIMUM_SCALAR);
 
             // pawn history based reduction, same logic as the quiet history
             int pawnHistoryReduction = pawnHistoryValue / PAWN_HISTORY_LMR_DIVISOR;            
-            lmrReduction -= clamp(pawnHistoryReduction * 1024, -PAWN_HISTORY_LMR_MINIMUM_SCALER, PAWN_HISTORY_LMR_MAXIMUM_SCALER);
+            lmrReduction -= clamp(pawnHistoryReduction * 1024, -PAWN_HISTORY_LMR_MINIMUM_SCALAR, PAWN_HISTORY_LMR_MAXIMUM_SCALAR);
         }
         // Noisy Moves
         else { 
@@ -1583,7 +1611,11 @@ int negamax(int alpha, int beta, int depth, ThreadData *t, my_time* time, Search
 
         // Reduce Less
         if (tt_pv) {
-            lmrReduction -= TT_PV_LMR_SCALER + (512 * pvNode) + (256 * improving);
+            lmrReduction -= TT_PV_LMR_SCALAR + (512 * pvNode) + (256 * improving);
+        }
+
+        if (gives_check) {
+            lmrReduction -= GIVES_CHECK_LMR_SCALAR;
         }
         
 
@@ -1678,22 +1710,43 @@ int negamax(int alpha, int beta, int depth, ThreadData *t, my_time* time, Search
                         t->search_d.quietHistory[pos->side][getMoveSource(currentMove)][getMoveTarget(currentMove)]
                         [is_square_threatened(pos, getMoveSource(currentMove))][is_square_threatened(pos, getMoveTarget(currentMove))];
 
-                        int history_depth = depth * 1024;
+                        // initial history bonus based on depth
+                        int quiethist_bonus = 10 + 200 * depth;                        
+                        int conthist_bonus  = 10 + 200 * depth;
+                        int pawnhist_bonus  = 10 + 200 * depth;
 
-                        history_depth += (!in_check && ttAdjustedEval <= alpha) * 1024;
+                        // if the move is failed low then give it bonus
+                        bool failed_low = !in_check && ttAdjustedEval <= alpha;
+                        quiethist_bonus += 200 * failed_low;
+                        conthist_bonus  += 200 * failed_low;
+                        pawnhist_bonus  += 200 * failed_low;
+                                                
+                        // clamp history bonus
+                        quiethist_bonus = myMIN(quiethist_bonus, 4096);
+                        conthist_bonus = myMIN(conthist_bonus, 4096);
+                        pawnhist_bonus = myMIN(pawnhist_bonus, 4096);
 
-                        history_depth /= 1024;
-
-                        updateQuietMoveHistory(t, bestMove, pos->side, history_depth, badQuiets);
-                        updateContinuationHistory(t, bestMove, history_depth, badQuiets, quiet_history_score, ss);
-                        updatePawnHistory(t, bestMove, history_depth, badQuiets);
+                        updateQuietMoveHistory(t, bestMove, pos->side, quiethist_bonus, badQuiets);
+                        updateContinuationHistory(t, bestMove, conthist_bonus, badQuiets, quiet_history_score, ss);
+                        updatePawnHistory(t, bestMove, pawnhist_bonus, badQuiets);
                         
                     } else { // noisy moves
-                        updateCaptureHistory(t, bestMove, depth);
+                        // initial history bonus based on depth
+                        int capthist_bonus = 10 + 200 * depth;                        
+
+                        // clamp history bonus
+                        capthist_bonus = myMIN(capthist_bonus, 4096);
+
+                        updateCaptureHistory(t, bestMove, capthist_bonus);
                     }
+                    // initial history bonus based on depth
+                    int capthist_malus_bonus = 10 + 200 * depth;
+                    
+                    // clamp history bonus
+                    capthist_malus_bonus = myMIN(capthist_malus_bonus, 4096);
 
                     // always penalize bad noisy moves
-                    updateCaptureHistoryMalus(t, depth, noisyMoves, bestMove);
+                    updateCaptureHistoryMalus(t, capthist_malus_bonus, noisyMoves, bestMove);
 
                     // node (move) fails high
                     break;
@@ -1782,9 +1835,8 @@ int searchPosition(int depth, bool benchmark, ThreadData *t, my_time* time) {
     quiet_history_aging();    
 
     // iterative deepening
-    for (int current_depth = 1; current_depth <= depth; current_depth++) {
-        //printf("Node limit: %llu\n", time->isNodeLimit ? time->node_limit : 0);
-        if (time->stopped == 1) {
+    for (int current_depth = 1; current_depth <= depth; current_depth++) {        
+        if (time->stopped || time->quit) {
             break;
         }
 
@@ -1936,7 +1988,7 @@ int searchPosition(int depth, bool benchmark, ThreadData *t, my_time* time) {
         // best move placeholder
         printf("bestmove ");
         printMove(t->pos.pvTable[0][0]);
-        printf("\n");
+        printf("\n");        
     }
     return score;
 }

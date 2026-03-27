@@ -219,6 +219,17 @@ void prefetch_hash_entry(uint64_t hash_key, uint8_t fmr_key) {
     __builtin_prefetch(&hashTable[index]);
 }
 
+void prefetch_corrhist(board *pos) { 
+    const int mask = CORRHIST_SIZE - 1;
+    const int side = pos->side;
+
+    __builtin_prefetch(&thread_pool.shared_history.pawn_corrhist[side][pos->pawnKey & mask]);
+    __builtin_prefetch(&thread_pool.shared_history.minor_corrhist[side][pos->minorKey & mask]);
+    __builtin_prefetch(&thread_pool.shared_history.major_corrhist[side][pos->majorKey & mask]);
+    __builtin_prefetch(&thread_pool.shared_history.non_pawn_corrhist[white][side][pos->whiteNonPawnKey & mask]);
+    __builtin_prefetch(&thread_pool.shared_history.non_pawn_corrhist[black][side][pos->blackNonPawnKey & mask]);
+    __builtin_prefetch(&thread_pool.shared_history.krp_corrhist[side][pos->krpKey & mask]);
+}
 
 void writeHashEntry(uint64_t key, int16_t score, uint16_t bestMove, uint8_t depth, uint8_t hashFlag, bool ttPv, board* position, uint8_t fmr_key) {
     // create a TT instance pointer to particular hash entry storing
@@ -250,7 +261,7 @@ void writeHashEntry(uint64_t key, int16_t score, uint16_t bestMove, uint8_t dept
 }
 
 // read hash entry data
-int readHashEntry(board *position, uint16_t *move, int16_t *tt_score,
+bool readHashEntry(board *position, uint16_t *move, int16_t *tt_score,
                     uint8_t *tt_depth, uint8_t *tt_flag, bool *tt_pv, uint8_t fmr_key) {
     // create a TT instance pointer to particular hash entry storing
     // the scoring data for the current board position if available
@@ -273,11 +284,11 @@ int readHashEntry(board *position, uint16_t *move, int16_t *tt_score,
         *tt_flag = hashEntry->flag;
         *tt_pv = hashEntry->ttPv;
 
-        return 1;
+        return true;
 
     }
     // if hash entry doesn't exist
-    return 0;
+    return false;
 }
 
 
